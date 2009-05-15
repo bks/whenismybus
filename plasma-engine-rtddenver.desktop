@@ -1,0 +1,17 @@
+[Desktop Entry]
+Name=Denver RTD Engine
+Comment=Provides bus routes and schedules for the Denver Regional Transportaion District
+Type=Service
+ 
+X-KDE-ServiceTypes=Plasma/DataEngine
+X-KDE-Library=plasma_engine_rtddenver
+X-Plasma-EngineName=rtddenver
+X-KDE-PluginInfo-Author=Benjamin K. Stuhl
+X-KDE-PluginInfo-Email=bks24@cornell.edu
+X-KDE-PluginInfo-Name=rtddenver
+X-KDE-PluginInfo-Version=0.1
+X-KDE-PluginInfo-Website=http://plasma.kde.org/
+X-KDE-PluginInfo-Category=Bus Schedules
+X-KDE-PluginInfo-Depends=
+X-KDE-PluginInfo-License=LGPL
+X-KDE-PluginInfo-EnabledByDefault=true

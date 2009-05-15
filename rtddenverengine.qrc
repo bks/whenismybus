@@ -1,0 +1,5 @@
+<!DOCTYPE RCC><RCC version="1.0">
+<qresource>
+    <file alias="data/parseSchedule.js">parseSchedule.js</file>
+</qresource>
+</RCC>
