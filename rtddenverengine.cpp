@@ -190,6 +190,80 @@ KJob *RtdDenverEngine::fetchRouteList()
     return fetchJob;
 }
 
+static QString dumpJsObj(const QVariant& obj, QString indent = QString());
+static QString dumpJsArray(const QVariant& array, QString indent = QString());
+
+static QString dumpJsArray(const QVariant& array, QString indent)
+{
+    QString ret;
+    QVariantList list = qvariant_cast<QVariantList>(array);
+
+    for (int i = 0; i < list.length(); i++) {
+	QVariant val = list[i];
+	ret += indent;
+	switch (val.type()) {
+	case QVariant::Map:
+	  ret += "{\n" + dumpJsObj(val, indent + "  ");
+	  ret += indent + '}';
+	  break;
+	case QVariant::List:
+	  ret += "[\n" + dumpJsArray(val, indent + "  ");
+	  ret += indent + ']';
+	  break;
+	case QVariant::Int:
+	case QVariant::Double:
+	  ret += val.toString();
+	  break;
+	default:
+	  ret += '"' + val.toString() + '"';
+	  break;
+	}
+
+	if (i < list.length() - 1)
+	  ret += ',';
+
+	ret += '\n';
+    }
+
+    return ret;
+}
+
+static QString dumpJsObj(const QVariant& obj, QString indent)
+{
+    QString ret;
+    QVariantMap map = qvariant_cast<QVariantMap>(obj);
+    QStringList keys = map.keys();
+
+    for (int i = 0; i < keys.length(); i++) {
+	ret += indent + keys[i] + ": ";
+	QVariant val = map[keys[i]];
+	switch (val.type()) {
+	case QVariant::Map:
+	  ret += "{\n" + dumpJsObj(val, indent + "  ");
+	  ret += indent + '}';
+	  break;
+	case QVariant::List:
+	  ret += "[\n" + dumpJsArray(val, indent + "  ");
+	  ret += indent + ']';
+	  break;
+	case QVariant::Int:
+	case QVariant::Double:
+	  ret += val.toString();
+	  break;
+	default:
+	  ret += '"' + val.toString() + '"';
+	  break;
+	}
+
+	if (i < keys.length() - 1)
+	  ret += ',';
+
+	ret += '\n';
+    }
+
+    return ret;
+}
+
 // use QtWebKit to parse RTD's "html", and then use some JavaScript to
 // pull out the elements we care about
 Plasma::DataEngine::Data RtdDenverEngine::parseSchedule(const QByteArray& schedule)
@@ -217,7 +291,12 @@ Plasma::DataEngine::Data RtdDenverEngine::parseSchedule(const QByteArray& schedu
 
     QFile parseScript(":/data/parseSchedule.js");
     parseScript.open(QIODevice::ReadOnly);
-    kDebug() << frame->evaluateJavaScript(parseScript.readAll());
+    QVariant jsRet = frame->evaluateJavaScript(parseScript.readAll());
+//    kDebug() << dumpJsObj(jsRet);
+
+    QVariantMap vm = qvariant_cast<QVariantMap>(jsRet);
+    for (QVariantMap::const_iterator it = vm.constBegin(); it != vm.constEnd(); it++)
+      schedules.insert(it.key(), it.value());
 
     return schedules;
 }

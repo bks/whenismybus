@@ -1,11 +1,36 @@
 (function () {
-  // fetch the list of stations and setup our final datastructure
-  var schedules = new Object;
+  // figure out what directions this route goes
+  var direction;
+  var availableDirections = new Array;
+  var directionIt = document.evaluate("//td[@class='scheduleHeaderBlueHilite']", document,
+	      null, XPathResult.UNORDERED_NODE_ITERATOR_TYPE, null);
+
+  for (var possibleDirection = directionIt.iterateNext(); possibleDirection; possibleDirection = directionIt.iterateNext()) {
+    var captures;
+    if ((captures = /(North|South|East|West)\s+Bound/.exec(possibleDirection.textContent)) != null) {
+      // we've found a direction: record it
+      switch (captures[1]) {
+      case "North": availableDirections.push("N"); break;
+      case "South": availableDirections.push("S"); break;
+      case "East": availableDirections.push("E"); break;
+      case "West": availableDirections.push("W"); break;
+      default: availableDirections.push("? (" + captures[1] + ")"); break;
+      }
+
+      if (document.evaluate("count(.//a)", possibleDirection, null, XPathResult.NUMBER_TYPE, null).numberValue == 0) {
+	// _not_ a link: the currently listed schedule's direction
+	direction = availableDirections.slice(-1, undefined)[0];
+      }
+    }
+  }
+
+  // fetch the list of stations
   var stations = new Array;
   var stationIt = document.evaluate("//div[@class='scheduleStations']", document, 
 	      null, XPathResult.ORDERED_NODE_ITERATOR_TYPE, null);
   var station = stationIt.iterateNext();
 
+  var schedules = new Object;
   while (station) {
     schedules[station.textContent] = new Array;
     stations.push(station.textContent);
@@ -14,13 +39,14 @@
 
   // see if we have subroutes (e.g. B/BX/BF)
   var hasSubroutes = (document.evaluate("count(//tr[@class='headrow']//div[@class='scheduleTimesGrey'])",
-	  document, null, XPathResult.ANY_TYPE, null).numberValue != 0);
+	  document, null, XPathResult.NUMBER_TYPE, null).numberValue != 0);
 
   // and now loop over the rows of the schedule to figure out the actual schedule
   var rowIt = document.evaluate("//tr[@class='row']", document,
 	      null, XPathResult.ORDERED_NODE_ITERATOR_TYPE, null);
   var row = rowIt.iterateNext();
 
+  var subroutes = new Object;
   while (row) {
     var colIt = document.evaluate(".//div[@class='scheduleTimesGrey']", row,
 	      null, XPathResult.ORDERED_NODE_ITERATOR_TYPE, null);
@@ -40,6 +66,7 @@ column:
     while (col) {
       if (first && hasSubroutes) {
 	subRoute = col.textContent;
+	subroutes[subRoute] = 1;
 	col = colIt.iterateNext();
 	first = false;
 	continue column;
@@ -47,6 +74,13 @@ column:
 
       var scheduleEntry = new Object;
       scheduleEntry.time = col.textContent;
+
+      if (scheduleEntry.time == "--") {
+	// no stop at this station for this bus
+	i++;
+	col = colIt.iterateNext();
+	continue column;
+      }
 
       if (subRoute) {
 	scheduleEntry.route = subRoute;
@@ -60,5 +94,16 @@ column:
     row = rowIt.iterateNext();
   }
 
-  return schedules;
+  // convert our set of subroutes to a list
+  var subrouteList = new Array;
+  for (var r in subroutes)
+      subrouteList.push(r);
+
+  var ret = new Object;
+  ret.schedules = schedules;
+  ret.subroutes = subrouteList;
+  ret.direction = direction;
+  ret.availableDirections = availableDirections;
+
+  return ret;
 })()
