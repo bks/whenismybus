@@ -38,7 +38,7 @@
   }
 
   // see if we have subroutes (e.g. B/BX/BF)
-  var hasSubroutes = (document.evaluate("count(//tr[@class='headrow']//div[@class='scheduleTimesGrey'])",
+  var hasSubroutes = (document.evaluate("string-length(string(//tr[@class='headrow']//div[@class='scheduleTimesGrey'][1]/text()))",
 	  document, null, XPathResult.NUMBER_TYPE, null).numberValue != 0);
 
   // and now loop over the rows of the schedule to figure out the actual schedule
