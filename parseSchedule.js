@@ -19,25 +19,30 @@
 
   for (var possibleDirection = directionIt.iterateNext(); possibleDirection; possibleDirection = directionIt.iterateNext()) {
     var captures;
-    if ((captures = /(North|South|East|West)\s+Bound/.exec(possibleDirection.textContent)) != null) {
+    if ((captures = /(North|South|East|West)\s+Bound/.exec(possibleDirection.textContent)) != null ||
+	(captures = /(Loop|Clockwise|Counterclockwise)/.exec(possibleDirection.textContent)) != null) {
       // we've found a direction: record it
       var currentDir;
       switch (captures[1]) {
-      case "North": availableDirections = "NS"; currentDir = "N"; break;
-      case "South": availableDirections = "NS"; currentDir = "S"; break;
-      case "East": availableDirections = "EW"; currentDir = "E"; break;
-      case "West": availableDirections = "EW"; currentDir = "W"; break;
+      case "North": currentDir = "N"; break;
+      case "South": currentDir = "S"; break;
+      case "East": currentDir = "E"; break;
+      case "West": currentDir = "W"; break;
+      case "Loop": currentDir = "Loop"; break;
+      case "Clockwise": currentDir = "CW"; break;
+      case "Counterclockwise": currentDir = "CCW"; break;
       default: availableDirections = ("? (" + captures[1] + ")"); break;
       }
+
+      if (availableDirections != null)
+	availableDirections += "-" + currentDir;
+      else 
+	availableDirections = currentDir;
 
       if (document.evaluate("count(.//a)", possibleDirection, null, XPathResult.NUMBER_TYPE, null).numberValue == 0) {
 	// _not_ a link: the currently listed schedule's direction
 	direction = currentDir;
       }
-    } else if (possibleDirection.textContent.match(/Loop/)) {
-      availableDirections = "Loop";
-      direction = "Loop";
-      break;
     }
   }
 

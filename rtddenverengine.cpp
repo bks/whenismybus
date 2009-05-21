@@ -69,14 +69,21 @@ void RtdDenverEngine::addSourcesForRouteList()
 {
     for (QHash<QString, RouteData>::const_iterator it = m_routes.begin(); it != m_routes.end(); it++) {
 	emit sourceAdded(QLatin1String("DirectionOf ") + it.key());
-	if (!it.value().directions.isEmpty()) {
-	    if (it.value().directions == QLatin1String("Loop")) {
-		emit sourceAdded(QLatin1String("ScheduleOf ") + it.key() + " L");
-	    } else {
-		emit sourceAdded(QLatin1String("ScheduleOf ") + it.key() + ' ' + it.value().directions.at(0));
-		emit sourceAdded(QLatin1String("ScheduleOf ") + it.key() + ' ' + it.value().directions.at(1));
-	    }
-	}
+	if (!it.value().directions.isEmpty())
+	    emitSchedulesForRoute(it.key(), it.value().directions);
+    }
+}
+
+void RtdDenverEngine::emitSchedulesForRoute(const QString& routeName, const QString& directions)
+{
+    foreach (QString direction, directions.split('-')) {
+	if (direction == QLatin1String("Loop"))
+	    direction = QLatin1String("L");
+	else if (direction == "CW")
+	    direction = QLatin1String("C");
+	else if (direction == "CCW")
+	    direction = "c";
+	emit sourceAdded(QLatin1String("ScheduleOf ") + routeName + ' ' + direction);
     }
 }
 
@@ -163,10 +170,13 @@ bool RtdDenverEngine::updateSourceEvent(const QString& sourceName)
     } else if (sourceName.startsWith("DirectionOf ")) {
 	QStringList parts = sourceName.split(' ');
 
-	if (parts.length() != 2 || !m_routes.contains(parts[1]))
+	if (parts.length() < 2)
 	    return false;
 
-	QString routeName = parts[1];
+      QString routeName = QStringList(parts.mid(1)).join(QLatin1String(" "));
+	if (!m_routes.contains(routeName))
+	    return false;
+
 	QString directions = m_routes[routeName].directions;
 
 	// we already know which way this route runs
@@ -187,14 +197,14 @@ bool RtdDenverEngine::updateSourceEvent(const QString& sourceName)
     } else if (sourceName.startsWith("ScheduleOf ")) {
 	QStringList parts = sourceName.split(' ');
 
-	if (parts.length() != 3 || parts[2].length() != 1)
+	if (parts.length() < 3)
 	    return false;
 
-	QString routeName = parts[1];
-	int direction = parts[2].at(0).unicode();
-
+	QString routeName = QStringList(parts.mid(1, parts.length() - 2)).join(QLatin1String(" "));
 	if (!m_routes.contains(routeName))
 	    return false;
+
+	int direction = parts.last().at(0).unicode();
 
 	Plasma::DataEngine::Data stops = loadSchedule(routeName, todaysType(), direction);
 
@@ -289,18 +299,21 @@ kDebug() << "availableDirections:" << scheduleData[QLatin1String("availableDirec
     if (!jd.routeName.isEmpty() && m_routes[jd.routeName].directions.isEmpty()) {
 	QString directions = scheduleData[QLatin1String("availableDirections")].toString();
 	m_routes[jd.routeName].directions = directions;
-	if (directions == QLatin1String("Loop")) {
-	    emit sourceAdded(QLatin1String("ScheduleOf ") + jd.routeName + " L");
-	} else {
-	    emit sourceAdded(QLatin1String("ScheduleOf ") + jd.routeName + ' ' + directions.at(0));
-	    emit sourceAdded(QLatin1String("ScheduleOf ") + jd.routeName + ' ' + directions.at(1));
-	}
+	emitSchedulesForRoute(jd.routeName, directions);
     }
 
     // finally save the schedules
-    if (!jd.routeName.isEmpty())
-      saveSchedule(jd.routeName, jd.routeDay, scheduleData[QLatin1String("direction")].toString().at(0).unicode(),
+    if (!jd.routeName.isEmpty()) {
+      QString direction = scheduleData[QLatin1String("direction")].toString();
+      if (direction == QLatin1String("CW"))
+	  direction = "C";
+      else if (direction == QLatin1String("CCW"))
+	  direction = "c";
+
+      if (!direction.isEmpty())
+	  saveSchedule(jd.routeName, jd.routeDay, direction.at(0).unicode(),
 		    scheduleData[QLatin1String("schedules")].toMap());
+    }
 
     // call sourceUpdateEvent again to retry the desired source
     if (!jd.sourceName.isEmpty())
@@ -329,10 +342,26 @@ KJob *RtdDenverEngine::fetchSchedule(const QString& query, DayType day, int dire
     scheduleUrl += query;
     scheduleUrl += QString(QLatin1String("&serviceType=%1")).arg(int(day));
 
-    if (direction && direction != 'L') {
-	scheduleUrl += QLatin1String("&direction=");
-	scheduleUrl += QChar(direction);
-	scheduleUrl += QLatin1String("-Bound");
+    if (direction) {
+	switch (direction) {
+	case 'N':
+	case 'S':
+	case 'E':
+	case 'W':
+	    scheduleUrl += QString(QLatin1String("&direction=%1-Bound")).arg(QChar(direction));
+	    break;
+	case 'C':
+	    scheduleUrl += QLatin1String("&direction=Clock");
+	    break;
+	case 'c':
+	    scheduleUrl += QLatin1String("&direction=Counterclock");
+	    break;
+	case 'L':
+	    break;
+	default:
+	    kWarning() << "Unknown direction " << QChar(direction);
+	    return 0;
+	}
     }
 
     KJob *fetchJob = KIO::get(KUrl(scheduleUrl), KIO::NoReload, KIO::HideProgressInfo);
