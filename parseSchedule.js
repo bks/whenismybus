@@ -34,6 +34,10 @@
 	// _not_ a link: the currently listed schedule's direction
 	direction = currentDir;
       }
+    } else if (possibleDirection.textContent.match(/Loop/)) {
+      availableDirections = "Loop";
+      direction = "Loop";
+      break;
     }
   }
 
@@ -45,8 +49,12 @@
 
   var schedules = new Object;
   while (station) {
-    schedules[station.textContent] = new Array;
-    stations.push(station.textContent);
+    var stationName = station.textContent;
+    if (schedules[stationName] != null)
+	stationName += " (return)";
+
+    schedules[stationName] = new Array;
+    stations.push(stationName);
     station = stationIt.iterateNext();
   }
 

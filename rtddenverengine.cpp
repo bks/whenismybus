@@ -65,6 +65,21 @@ QStringList RtdDenverEngine::sources() const
     return ret;
 }
 
+void RtdDenverEngine::addSourcesForRouteList()
+{
+    for (QHash<QString, RouteData>::const_iterator it = m_routes.begin(); it != m_routes.end(); it++) {
+	emit sourceAdded(QLatin1String("DirectionOf ") + it.key());
+	if (!it.value().directions.isEmpty()) {
+	    if (it.value().directions == QLatin1String("Loop")) {
+		emit sourceAdded(QLatin1String("ScheduleOf ") + it.key() + " L");
+	    } else {
+		emit sourceAdded(QLatin1String("ScheduleOf ") + it.key() + ' ' + it.value().directions.at(0));
+		emit sourceAdded(QLatin1String("ScheduleOf ") + it.key() + ' ' + it.value().directions.at(1));
+	    }
+	}
+    }
+}
+
 bool RtdDenverEngine::sourceRequestEvent(const QString& sourceName)
 {
     return updateSourceEvent(sourceName);
@@ -239,6 +254,8 @@ void RtdDenverEngine::routeListResult(KJob *job)
 
     while (!m_pendingRoutes.isEmpty())
 	updateSourceEvent(m_pendingRoutes.takeFirst());
+
+    addSourcesForRouteList();
 }
 
 void RtdDenverEngine::schedulePageResult(KJob *job)
@@ -269,8 +286,16 @@ kDebug() << "availableDirections:" << scheduleData[QLatin1String("availableDirec
 	  << "direction:" << scheduleData[QLatin1String("direction")].toString();
 
     // then record the direction of this route
-    if (!jd.routeName.isEmpty())
-	m_routes[jd.routeName].directions = scheduleData[QLatin1String("availableDirections")].toString();
+    if (!jd.routeName.isEmpty() && m_routes[jd.routeName].directions.isEmpty()) {
+	QString directions = scheduleData[QLatin1String("availableDirections")].toString();
+	m_routes[jd.routeName].directions = directions;
+	if (directions == QLatin1String("Loop")) {
+	    emit sourceAdded(QLatin1String("ScheduleOf ") + jd.routeName + " L");
+	} else {
+	    emit sourceAdded(QLatin1String("ScheduleOf ") + jd.routeName + ' ' + directions.at(0));
+	    emit sourceAdded(QLatin1String("ScheduleOf ") + jd.routeName + ' ' + directions.at(1));
+	}
+    }
 
     // finally save the schedules
     if (!jd.routeName.isEmpty())
@@ -304,7 +329,7 @@ KJob *RtdDenverEngine::fetchSchedule(const QString& query, DayType day, int dire
     scheduleUrl += query;
     scheduleUrl += QString(QLatin1String("&serviceType=%1")).arg(int(day));
 
-    if (direction) {
+    if (direction && direction != 'L') {
 	scheduleUrl += QLatin1String("&direction=");
 	scheduleUrl += QChar(direction);
 	scheduleUrl += QLatin1String("-Bound");
@@ -526,6 +551,8 @@ bool RtdDenverEngine::loadRouteList()
 	in >> route >> key >> directions;
 	m_routes.insert(route, RouteData(key, directions));
     }
+
+    addSourcesForRouteList();
     return true;
 }
 
