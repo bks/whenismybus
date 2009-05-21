@@ -292,8 +292,8 @@ void RtdDenverEngine::schedulePageResult(KJob *job)
 	    updateAllSources();
     }
 
-kDebug() << "availableDirections:" << scheduleData[QLatin1String("availableDirections")].toString()
-	  << "direction:" << scheduleData[QLatin1String("direction")].toString();
+//    kDebug() << "availableDirections:" << scheduleData[QLatin1String("availableDirections")].toString()
+//	  << "direction:" << scheduleData[QLatin1String("direction")].toString();
 
     // then record the direction of this route
     if (!jd.routeName.isEmpty() && m_routes[jd.routeName].directions.isEmpty()) {
@@ -702,7 +702,7 @@ Plasma::DataEngine::Data RtdDenverEngine::loadSchedule(const QString& route, Day
     if (validAsOf != m_validAsOf)
 	goto remove;
 
-kDebug() << "route:" << route << "direction:" << char(direction);
+//    kDebug() << "route:" << route << "direction:" << char(direction);
 
     while (!in.atEnd()) {
 	QString station;
