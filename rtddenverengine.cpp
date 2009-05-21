@@ -190,8 +190,8 @@ bool RtdDenverEngine::updateSourceEvent(const QString& sourceName)
 
 	// load a schedule for this route with an unspecified direction: that will
 	// tell us the directions for this route
-	KJob *fetchJob = fetchSchedule(keyForRoute(routeName), todaysType(), 0);
-	m_jobData.insert(fetchJob, JobData(sourceName, routeName, todaysType()));
+	KJob *fetchJob = fetchSchedule(keyForRoute(routeName), Weekday, 0);
+	m_jobData.insert(fetchJob, JobData(sourceName, routeName, Weekday));
 	return true;
 
     } else if (sourceName.startsWith("ScheduleOf ")) {
