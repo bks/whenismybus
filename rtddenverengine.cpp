@@ -20,14 +20,16 @@
 #include "rtddenverengine.h"
 
 #include <KDE/KJob>
+#include <KDE/KStandardDirs>
 #include <KDE/KIO/Job>
 #include <KDE/KIO/TransferJob>
 
 #include <QtCore/QByteArray>
-#include <QtCore/QDate>
+#include <QtCore/QDataStream>
 #include <QtCore/QFile>
-#include <QtCore/QHash>
-#include <QtCore/QStringList>
+#include <QtCore/QPair>
+#include <QtCore/QRegExp>
+#include <QtCore/QTime>
 
 #include <QtWebKit/QWebFrame>
 #include <QtWebKit/QWebPage>
@@ -35,6 +37,32 @@
 RtdDenverEngine::RtdDenverEngine(QObject *parent, const QVariantList& args)
     : Plasma::DataEngine(parent, args)
 {
+}
+
+RtdDenverEngine::~RtdDenverEngine()
+{
+    if (!m_routes.isEmpty())
+	saveRouteList();
+}
+
+QStringList RtdDenverEngine::sources() const
+{
+    QStringList ret;
+
+    ret << QLatin1String("Routes") << QLatin1String("ValidAsOf");
+
+    foreach (const QString& route, routeList()) {
+	ret << QLatin1String("DirectionOf ") + route;
+
+	QString directions = m_routes[route].directions;
+
+	if (!directions.isEmpty()) {
+	    ret << QLatin1String("ScheduleOf ") + route + ' ' + directions[0];
+	    ret << QLatin1String("ScheduleOf ") + route + ' ' + directions[1];
+	}
+    }
+
+    return ret;
 }
 
 bool RtdDenverEngine::sourceRequestEvent(const QString& sourceName)
@@ -71,64 +99,122 @@ static bool isRtdHoliday(const QDate& date)
     return false;
 }
 
-RtdDenverEngine::DayType RtdDenverEngine::parseDay(const QString& day)
+RtdDenverEngine::DayType RtdDenverEngine::todaysType() const
 {
-    static QHash<QString, DayType> dayTypes;
+    QDate today = QDate::currentDate();
 
-    if (dayTypes.isEmpty()) {
-	dayTypes.insert("Weekday", Weekday);
-	dayTypes.insert("Saturday", Saturday);
-	dayTypes.insert("Sunday", SundayHoliday);
-	dayTypes.insert("Holiday", SundayHoliday);
-    }
-    if (dayTypes.contains(day))
-	return dayTypes[day];
-
-    return Weekday;
+    if (today.day() == Qt::Saturday)
+	return Saturday;
+    else if (today.day() == Qt::Sunday || isRtdHoliday(today))
+	return SundayHoliday;
+    else
+	return Weekday;
 }
 
 bool RtdDenverEngine::updateSourceEvent(const QString& sourceName)
 {
-    KJob *fetchJob = 0;
-    if (sourceName == QLatin1String("Routes")) {
-	fetchJob = fetchRouteList();
-    } else if (sourceName.startsWith(QLatin1String("Schedule/"))) {
-	QStringList parts = sourceName.split('/');
-
-	if (parts.length() < 2 || parts.length() > 4)
-	    return false;
-
-	// figure out what day to look up the schedule for
-	DayType day;
-	if (parts.length() > 2 && parts[2] != QLatin1String("Today")) {
-	    day = parseDay(parts[2]);
-	} else {
-	    // default to whatever "today" is
-	    QDate today = QDate::currentDate();
-	    if (today.day() == Qt::Saturday)
-		day = Saturday;
-	    else if (today.day() == Qt::Sunday || isRtdHoliday(today))
-		day = SundayHoliday;
-	    else
-		day = Weekday;
-	}
-
-	// see if a travel direction was specified
-	QString direction;
-	if (parts.length() > 3)
-	    direction = parts[3];
-
-	fetchJob = fetchSchedule(parts[1], day, direction);
-    }
-
-    if (!fetchJob)
+    if (m_pendingValidation.contains(sourceName) || m_pendingRoutes.contains(sourceName))
 	return false;
 
-    JobData jd;
-    jd.sourceName = sourceName;
-    m_jobData.insert(fetchJob, jd);
-    return true;
+    if (!schedulesValid()) {
+	checkValidity();
+	m_pendingValidation.append(sourceName);
+	return false;
+    }
+
+    if (sourceName == QLatin1String("ValidAsOf")) {
+	setData(sourceName, m_validAsOf);
+	return true;
+    }
+
+    if (m_routes.isEmpty() && !loadRouteList()) {
+	// we need our route mapping before we can do anything else:
+	// request a load of the route list and queue up this source
+	if (!alreadyFetchingFor("Routes")) {
+	    KJob *fetchJob = fetchRouteList();
+	    if (fetchJob) {
+		m_jobData.insert(fetchJob, JobData("Routes"));
+	    }
+	}
+	m_pendingRoutes.append(sourceName);
+
+	// we don't have any new information yet
+	return false;
+    }
+
+    if (sourceName == QLatin1String("Routes")) {
+	setData(sourceName, routeList());
+	return true;
+    } else if (sourceName.startsWith("DirectionOf ")) {
+	QStringList parts = sourceName.split(' ');
+
+	if (parts.length() != 2 || !m_routes.contains(parts[1]))
+	    return false;
+
+	QString routeName = parts[1];
+	QString directions = m_routes[routeName].directions;
+
+	// we already know which way this route runs
+	if (!directions.isEmpty()) {
+	    setData(sourceName, directions);
+	    return true;
+	}
+
+	if (alreadyFetchingFor(sourceName))
+	    return true;
+
+	// load a schedule for this route with an unspecified direction: that will
+	// tell us the directions for this route
+	KJob *fetchJob = fetchSchedule(keyForRoute(routeName), todaysType(), 0);
+	m_jobData.insert(fetchJob, JobData(sourceName, routeName, todaysType()));
+	return true;
+
+    } else if (sourceName.startsWith("ScheduleOf ")) {
+	QStringList parts = sourceName.split(' ');
+
+	if (parts.length() != 3 || parts[2].length() != 1)
+	    return false;
+
+	QString routeName = parts[1];
+	int direction = parts[2].at(0).unicode();
+
+	if (!m_routes.contains(routeName))
+	    return false;
+
+	Plasma::DataEngine::Data stops = loadSchedule(routeName, todaysType(), direction);
+
+	if (stops.isEmpty()) {
+	    if (alreadyFetchingFor(sourceName))
+		return true;
+
+	    // we don't have this route cached: load it from the network
+	    KJob *fetchJob = fetchSchedule(keyForRoute(routeName), todaysType(), direction);
+	    m_jobData.insert(fetchJob, JobData(sourceName, routeName, todaysType()));
+	    return true;
+	}
+
+	setData(sourceName, stops);
+	return true;
+    }
+
+    return false;
 }
+
+void RtdDenverEngine::checkValidity()
+{
+    // fetching any route from the network will update our validity timestamp,
+    // so we arbitrarily fetch the B (Denver-Boulder) route, since it
+    // is highly unlikely to be canceled...
+
+    if (!m_jobData.isEmpty())
+	return;  // there's already a running job, it will take care of things for us
+
+    KJob *fetchJob = fetchSchedule("routeId=B", Weekday, 0);
+
+    if (fetchJob)
+      m_jobData.insert(fetchJob, JobData(QString()));
+}
+
 
 void RtdDenverEngine::dataReceived(KIO::Job *job, const QByteArray& data)
 {
@@ -142,9 +228,17 @@ void RtdDenverEngine::routeListResult(KJob *job)
     if (job->error())
 	return;
 
-    Plasma::DataEngine::Data routes = parseRouteList(jd.networkData);
+    QHash<QString, QString> routes = parseRouteList(jd.networkData);
 
-    setData(jd.sourceName, routes);
+    for (QHash<QString, QString>::const_iterator it = routes.constBegin(); it != routes.constEnd(); it++)
+	m_routes.insert(it.key(), RouteData(it.value()));
+
+    // if we had an explicit request for the routes
+    if (!jd.sourceName.isEmpty())
+	setData(jd.sourceName, routeList());
+
+    while (!m_pendingRoutes.isEmpty())
+	updateSourceEvent(m_pendingRoutes.takeFirst());
 }
 
 void RtdDenverEngine::schedulePageResult(KJob *job)
@@ -154,20 +248,66 @@ void RtdDenverEngine::schedulePageResult(KJob *job)
     if (job->error())
 	return;
 
-    Plasma::DataEngine::Data schedules = parseSchedule(jd.networkData);
+    // parse the downloaded schedule
+    QVariantMap scheduleData = parseSchedule(jd.networkData);
 
-    setData(jd.sourceName, schedules);
+    if (scheduleData.isEmpty())
+	return;
+
+    // store the parsed data:
+    // first check the schedule's temporal validity
+    m_validCheckedDate = QDate::currentDate();
+    QDate validAsOf = QDate::fromString(scheduleData["validAsOf"].toString(), QLatin1String("MMMM d, yyyy"));
+    if (validAsOf.isValid()) {
+	QDate oldValidAsOf = m_validAsOf;
+	m_validAsOf = validAsOf;
+	if (oldValidAsOf.isValid() && oldValidAsOf != validAsOf)
+	    updateAllSources();
+    }
+
+kDebug() << "availableDirections:" << scheduleData[QLatin1String("availableDirections")].toString()
+	  << "direction:" << scheduleData[QLatin1String("direction")].toString();
+
+    // then record the direction of this route
+    if (!jd.routeName.isEmpty())
+	m_routes[jd.routeName].directions = scheduleData[QLatin1String("availableDirections")].toString();
+
+    // finally save the schedules
+    if (!jd.routeName.isEmpty())
+      saveSchedule(jd.routeName, jd.routeDay, scheduleData[QLatin1String("direction")].toString().at(0).unicode(),
+		    scheduleData[QLatin1String("schedules")].toMap());
+
+    // call sourceUpdateEvent again to retry the desired source
+    if (!jd.sourceName.isEmpty())
+	updateSourceEvent(jd.sourceName);
+
+    // and retry any queries waiting for a validity test
+    while (!m_pendingValidation.isEmpty())
+	updateSourceEvent(m_pendingValidation.takeFirst());
 }
 
-KJob *RtdDenverEngine::fetchSchedule(const QString& query, DayType day, const QString& direction)
+// do we already have a fetch underway for the give source name
+bool RtdDenverEngine::alreadyFetchingFor(const QString& query)
+{
+    foreach (const JobData& jd, m_jobData) {
+	if (jd.sourceName == query)
+	    return true;
+    }
+    return false;
+}
+
+// fetch a schedule for a given route, day, and direction
+// direction == 0 means no direction specified
+KJob *RtdDenverEngine::fetchSchedule(const QString& query, DayType day, int direction)
 {
     QString scheduleUrl = QLatin1String("http://www3.rtd-denver.com/schedules/getSchedule.action?");
     scheduleUrl += query;
     scheduleUrl += QString(QLatin1String("&serviceType=%1")).arg(int(day));
 
-    if (!direction.isEmpty()) {
+    if (direction) {
 	scheduleUrl += QLatin1String("&direction=");
-	scheduleUrl += direction;
+	scheduleUrl += QChar(direction);
+	scheduleUrl += QLatin1String("-Bound");
     }
 
     KJob *fetchJob = KIO::get(KUrl(scheduleUrl), KIO::NoReload, KIO::HideProgressInfo);
@@ -196,7 +336,7 @@ static QString dumpJsArray(const QVariant& array, QString indent = QString());
 static QString dumpJsArray(const QVariant& array, QString indent)
 {
     QString ret;
-    QVariantList list = qvariant_cast<QVariantList>(array);
+    QVariantList list = array.toList();
 
     for (int i = 0; i < list.length(); i++) {
 	QVariant val = list[i];
@@ -231,7 +371,7 @@ static QString dumpJsArray(const QVariant& array, QString indent)
 static QString dumpJsObj(const QVariant& obj, QString indent)
 {
     QString ret;
-    QVariantMap map = qvariant_cast<QVariantMap>(obj);
+    QVariantMap map = obj.toMap();
     QStringList keys = map.keys();
 
     for (int i = 0; i < keys.length(); i++) {
@@ -264,9 +404,9 @@ static QString dumpJsObj(const QVariant& obj, QString indent)
     return ret;
 }
 
-// use QtWebKit to parse RTD's "html", and then use some JavaScript to
+// use QtWebKit to parse RTD's (buggy) html, and then use some JavaScript to
 // pull out the elements we care about
-Plasma::DataEngine::Data RtdDenverEngine::parseSchedule(const QByteArray& schedule)
+QVariantMap RtdDenverEngine::parseSchedule(const QByteArray& schedule) const
 {
     Plasma::DataEngine::Data schedules;
 
@@ -292,20 +432,15 @@ Plasma::DataEngine::Data RtdDenverEngine::parseSchedule(const QByteArray& schedu
     QFile parseScript(":/data/parseSchedule.js");
     parseScript.open(QIODevice::ReadOnly);
     QVariant jsRet = frame->evaluateJavaScript(parseScript.readAll());
-//    kDebug() << dumpJsObj(jsRet);
 
-    QVariantMap vm = qvariant_cast<QVariantMap>(jsRet);
-    for (QVariantMap::const_iterator it = vm.constBegin(); it != vm.constEnd(); it++)
-      schedules.insert(it.key(), it.value());
-
-    return schedules;
+    return jsRet.toMap();
 }
 
 // sort-of parse the JavaScript data structure that the RTD website uses
 // for its schedule menu
-Plasma::DataEngine::Data RtdDenverEngine::parseRouteList(const QByteArray& scheduleList)
+QHash<QString, QString> RtdDenverEngine::parseRouteList(const QByteArray& scheduleList) const
 {
-    Plasma::DataEngine::Data routes;
+    QHash<QString, QString> routes;
     QRegExp urlPattern("\\?(.+)$");
 
     int nextPos = 0;
@@ -345,6 +480,187 @@ Plasma::DataEngine::Data RtdDenverEngine::parseRouteList(const QByteArray& sched
     }
 
     return routes;
+}
+
+enum {
+    ROUTE_LIST_FORMAT_VERSION = 1,
+    SCHEDULE_FORMAT_VERSION = 1
+};
+
+void RtdDenverEngine::saveRouteList() const
+{
+    QString routeListPath = KStandardDirs::locateLocal("data", 
+			      QLatin1String("plasma_engine_rtddenver/route_list.dat"));
+    QFile routeFile(routeListPath);
+
+    if (!routeFile.open(QIODevice::WriteOnly))
+	return;
+
+    QDataStream out(&routeFile);
+    out << qint32(ROUTE_LIST_FORMAT_VERSION);
+    for (QHash<QString, RouteData>::const_iterator it = m_routes.constBegin(); it != m_routes.constEnd(); it++) {
+	out << it.key();
+	out << it.value().key;
+	out << it.value().directions;
+    }
+}
+
+bool RtdDenverEngine::loadRouteList()
+{
+    QString routeListPath = KStandardDirs::locateLocal("data", 
+			      QLatin1String("plasma_engine_rtddenver/route_list.dat"));
+    QFile routeFile(routeListPath);
+
+    if (!routeFile.open(QIODevice::ReadOnly))
+	return false;
+
+    QDataStream in(&routeFile);
+
+    qint32 version;
+    in >> version;
+    if (version != ROUTE_LIST_FORMAT_VERSION)
+	return false;
+
+    while (!in.atEnd()) {
+	QString route, key, directions;
+	in >> route >> key >> directions;
+	m_routes.insert(route, RouteData(key, directions));
+    }
+    return true;
+}
+
+QString RtdDenverEngine::dayTypeName(DayType day) const
+{
+    switch (day) {
+    case Weekday:
+	return QLatin1String("Weekday");
+    case Saturday:
+	return QLatin1String("Saturday");
+    case SundayHoliday:
+	return QLatin1String("SundayHoliday");
+    }
+    Q_ASSERT_X(false, "RtdDenverEngine::dayTypeName", "bad day type");
+    return QLatin1String("unknown");
+}
+
+QString RtdDenverEngine::scheduleFilePath(const QString& route, DayType day, int direction) const
+{
+    QString sanitizedRoute = route;
+    sanitizedRoute.replace('/', '_');
+
+    QString fileName = QLatin1String("Schedule-") +
+		       sanitizedRoute + '-' + QChar(direction) + '-' +
+		       dayTypeName(day) + QLatin1String(".dat");
+
+    return KStandardDirs::locateLocal("data", QLatin1String("plasma_engine_rtddenver/") + fileName);
+}
+
+typedef QPair<QTime, QString> TimeRoutePair;
+Q_DECLARE_METATYPE(QList<TimeRoutePair>)
+
+static QTime parseRtdTime(const QString& str)
+{
+    int hr, min;
+    int digitCount;
+
+    if (str.length() < 4)
+	return QTime();
+
+    for (int i = 0; i < str.length(); i++) {
+	if (str[i] < '0' || str[i] > '9')
+	    break;
+	digitCount++;
+    }
+
+    if (digitCount == 3) {
+	hr = str.left(1).toInt();
+	min = str.mid(1, 2).toInt();
+    } else if (digitCount == 4) {
+	hr = str.left(2).toInt();
+	min = str.mid(2, 2).toInt();
+    } else {
+	return QTime();
+    }
+
+    if (hr == 12 && str[digitCount] == 'A')
+	hr -= 12;
+
+    if (str[digitCount] == 'P')
+	hr += 12;
+
+    return QTime(hr, min);
+}
+
+void RtdDenverEngine::saveSchedule(const QString& route, DayType day, int direction, const QVariantMap& schedule) const
+{
+    QFile scheduleFile(scheduleFilePath(route, day, direction));
+
+    if (!m_validAsOf.isValid() || !scheduleFile.open(QIODevice::WriteOnly))
+	return;
+
+    QDataStream out(&scheduleFile);
+    out << qint32(SCHEDULE_FORMAT_VERSION);
+    out << m_validAsOf;
+
+    for (QVariantMap::const_iterator it = schedule.constBegin(); it != schedule.constEnd(); it++) {
+	out << it.key();
+
+	QList< QPair<QTime, QString> > outputStopList;
+	QVariantList stops = it.value().toList();
+	foreach (const QVariant& stop, stops) {
+	    QVariantMap stopData = stop.toMap();
+	    TimeRoutePair p;
+
+	    p.first = parseRtdTime(stopData[QLatin1String("time")].toString().trimmed());
+
+	    if (stopData.contains(QLatin1String("route")))
+		p.second = stopData[QLatin1String("route")].toString();
+	    else
+		p.second = route;
+
+	    if (p.first.isValid())
+		outputStopList.append(p);
+	}
+	out << outputStopList;
+    }
+}
+
+Plasma::DataEngine::Data RtdDenverEngine::loadSchedule(const QString& route, DayType day, int direction) const
+{
+    Plasma::DataEngine::Data data;
+
+    QFile scheduleFile(scheduleFilePath(route, day, direction));
+
+    if (!scheduleFile.exists() || !scheduleFile.open(QIODevice::ReadOnly))
+	return data;
+
+    QDataStream in(&scheduleFile);
+
+    qint32 version;
+    QDate validAsOf;
+    in >> version;
+    if (version != SCHEDULE_FORMAT_VERSION)
+	goto remove;
+
+    in >> validAsOf;
+    if (validAsOf != m_validAsOf)
+	goto remove;
+
+kDebug() << "route:" << route << "direction:" << char(direction);
+
+    while (!in.atEnd()) {
+	QString station;
+	in >> station;
+	QList<TimeRoutePair> stops;
+	in >> stops;
+	data.insert(station, qVariantFromValue(stops));
+    }
+    return data;
+
+remove:
+    scheduleFile.close();
+    scheduleFile.remove();
+    return Plasma::DataEngine::Data();
 }
 
 K_EXPORT_PLASMA_DATAENGINE(rtddenver, RtdDenverEngine)

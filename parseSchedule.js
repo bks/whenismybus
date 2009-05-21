@@ -1,7 +1,19 @@
 (function () {
+  // figure out when this schedule is valid as of
+  var validAsOf;
+  var validIt = document.evaluate("//p[@class='bodyBlueHeadline']", document,
+		  null, XPathResult.UNORDERED_NODE_ITERATOR_TYPE, null);
+  for (var possibleValid = validIt.iterateNext(); possibleValid; possibleValid = validIt.iterateNext()) {
+    var captures;
+    if ((captures = /Schedule\s+effective\s+as\s+of\s+(\w+ \d+, \d+)/.exec(possibleValid.textContent)) != null) {
+      validAsOf = captures[1];
+      break;
+    }
+  }
+
   // figure out what directions this route goes
   var direction;
-  var availableDirections = new Array;
+  var availableDirections;
   var directionIt = document.evaluate("//td[@class='scheduleHeaderBlueHilite']", document,
 	      null, XPathResult.UNORDERED_NODE_ITERATOR_TYPE, null);
 
@@ -9,17 +21,18 @@
     var captures;
     if ((captures = /(North|South|East|West)\s+Bound/.exec(possibleDirection.textContent)) != null) {
       // we've found a direction: record it
+      var currentDir;
       switch (captures[1]) {
-      case "North": availableDirections.push("N"); break;
-      case "South": availableDirections.push("S"); break;
-      case "East": availableDirections.push("E"); break;
-      case "West": availableDirections.push("W"); break;
-      default: availableDirections.push("? (" + captures[1] + ")"); break;
+      case "North": availableDirections = "NS"; currentDir = "N"; break;
+      case "South": availableDirections = "NS"; currentDir = "S"; break;
+      case "East": availableDirections = "EW"; currentDir = "E"; break;
+      case "West": availableDirections = "EW"; currentDir = "W"; break;
+      default: availableDirections = ("? (" + captures[1] + ")"); break;
       }
 
       if (document.evaluate("count(.//a)", possibleDirection, null, XPathResult.NUMBER_TYPE, null).numberValue == 0) {
 	// _not_ a link: the currently listed schedule's direction
-	direction = availableDirections.slice(-1, undefined)[0];
+	direction = currentDir;
       }
     }
   }
@@ -99,7 +112,11 @@ column:
   for (var r in subroutes)
       subrouteList.push(r);
 
+  if (validAsOf == null || schedules.length == 0 || direction == null || availableDirections == null)
+    return null;
+
   var ret = new Object;
+  ret.validAsOf = validAsOf;
   ret.schedules = schedules;
   ret.subroutes = subrouteList;
   ret.direction = direction;

@@ -21,8 +21,11 @@
 #define RTDDENVERENGINE_H
 
 #include <QtCore/QByteArray>
+#include <QtCore/QDate>
+#include <QtCore/QHash>
 #include <QtCore/QMap>
 #include <QtCore/QString>
+#include <QtCore/QStringList>
 
 #include <Plasma/DataEngine>
 
@@ -35,6 +38,8 @@ class RtdDenverEngine : public Plasma::DataEngine
 
     public:
 	RtdDenverEngine(QObject *parent, const QVariantList& args);
+	~RtdDenverEngine();
+	QStringList sources() const;
 
     protected:
 	bool sourceRequestEvent(const QString& sourceName);
@@ -51,19 +56,56 @@ class RtdDenverEngine : public Plasma::DataEngine
 	    SundayHoliday = 2,
 	    Weekday = 3
 	};
-	DayType parseDay(const QString& day);
+	DayType todaysType() const;
+	QString dayTypeName(DayType d) const;
 
-	KJob *fetchSchedule(const QString& query, DayType day, const QString& direction = QString());
+	bool schedulesValid() const { return (m_validCheckedDate == QDate::currentDate()); }
+	void checkValidity();
+
+	bool alreadyFetchingFor(const QString& query);
+	KJob *fetchSchedule(const QString& query, DayType day, int direction);
 	KJob *fetchRouteList();
 
-	Plasma::DataEngine::Data parseSchedule(const QByteArray& schedule);
-	Plasma::DataEngine::Data parseRouteList(const QByteArray& routeList);
+	QVariantMap parseSchedule(const QByteArray& schedule) const;
+	QHash<QString, QString> parseRouteList(const QByteArray& routeList) const;
+
+	void saveRouteList() const;
+	bool loadRouteList();
+	QString keyForRoute(const QString& route) const { return m_routes[route].key; }
+	QStringList routeList() const { return m_routes.keys(); }
+
+	QString scheduleFilePath(const QString& route, DayType day, int direction) const;
+	void saveSchedule(const QString& route, DayType day, int direction, const QVariantMap& schedule) const;
+	Plasma::DataEngine::Data loadSchedule(const QString& route, DayType day, int direction) const;
 
 	struct JobData {
 	    QString sourceName;
+	    QString routeName;
+	    DayType routeDay;
 	    QByteArray networkData;
+
+	    JobData() { }
+	    JobData(const QString& n) : sourceName(n) { }
+	    JobData(const QString& n, const QString& r, DayType d)
+	      : sourceName(n), routeName(r), routeDay(d) { }
 	};
+
 	QMap<KJob *, JobData> m_jobData;
+
+	struct RouteData {
+	    QString key;
+	    QString directions;
+
+	    RouteData() { }
+	    RouteData(const QString& k) : key(k) { }
+	    RouteData(const QString& k, const QString& d) : key(k), directions(d) { }
+	};
+
+	QHash<QString, RouteData> m_routes;
+	QStringList m_pendingValidation;
+	QStringList m_pendingRoutes;
+	QDate m_validCheckedDate;
+	QDate m_validAsOf;
 };
 
 #endif
