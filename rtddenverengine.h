@@ -62,8 +62,8 @@ class RtdDenverEngine : public Plasma::DataEngine
 	bool schedulesValid() const { return (m_validCheckedDate == QDate::currentDate()); }
 	void checkValidity();
 
-	bool alreadyFetchingFor(const QString& query);
-	KJob *fetchSchedule(const QString& query, DayType day, int direction);
+	bool alreadyFetchingFor(const QString& sourceName);
+	KJob *fetchSchedule(const QString& routeKey, DayType day, int direction);
 	KJob *fetchRouteList();
 
 	QVariantMap parseSchedule(const QByteArray& schedule) const;
