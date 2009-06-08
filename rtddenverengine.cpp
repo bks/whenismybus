@@ -88,9 +88,12 @@ static bool isRtdHoliday(const QDate& date)
     return false;
 }
 
-RtdDenverEngine::DayType RtdDenverEngine::todaysType() const
+RtdDenverEngine::DayType RtdDenverEngine::dayType(TodayTomorrow tt) const
 {
     QDate today = QDate::currentDate();
+
+    if (tt == Tomorrow)
+	today.addDays(1);
 
     if (today.day() == Qt::Saturday)
 	return Saturday;
@@ -210,7 +213,7 @@ bool RtdDenverEngine::updateSourceEvent(const QString& sourceName)
 	    return false;
 
 	// try to load the schedule from cache
-	Plasma::DataEngine::Data stops = loadSchedule(routeName, todaysType(), direction);
+	Plasma::DataEngine::Data stops = loadSchedule(routeName, dayType(Today), direction);
 
 	if (stops.isEmpty()) {
 	    // no valid cached schedule, so go to the network
@@ -218,8 +221,8 @@ bool RtdDenverEngine::updateSourceEvent(const QString& sourceName)
 		return true;
 
 	    // we don't have this route cached: load it from the network
-	    KJob *fetchJob = fetchSchedule(keyForRoute(routeName), todaysType(), direction);
-	    m_jobData.insert(fetchJob, JobData(sourceName, routeName, todaysType()));
+	    KJob *fetchJob = fetchSchedule(keyForRoute(routeName), dayType(Today), direction);
+	    m_jobData.insert(fetchJob, JobData(sourceName, routeName, dayType(Today)));
 	    return true;
 	}
 

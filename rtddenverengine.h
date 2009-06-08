@@ -56,7 +56,11 @@ class RtdDenverEngine : public Plasma::DataEngine
 	    SundayHoliday = 2,
 	    Weekday = 3
 	};
-	DayType todaysType() const;
+	enum TodayTomorrow {
+	    Today,
+	    Tomorrow
+	};
+	DayType dayType(TodayTomorrow tt) const;
 	QString dayTypeName(DayType d) const;
 
 	bool schedulesValid() const { return (m_validCheckedDate == QDate::currentDate()); }
