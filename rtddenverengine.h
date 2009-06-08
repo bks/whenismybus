@@ -24,6 +24,7 @@
 #include <QtCore/QDate>
 #include <QtCore/QHash>
 #include <QtCore/QMap>
+#include <QtCore/QSet>
 #include <QtCore/QString>
 #include <QtCore/QStringList>
 
@@ -64,10 +65,11 @@ class RtdDenverEngine : public Plasma::DataEngine
 	QString dayTypeName(DayType d) const;
 
 	bool schedulesValid() const { return (m_validCheckedDate == QDate::currentDate()); }
-	void checkValidity();
+	void checkValidity(const QString& sourceName);
 
-	bool alreadyFetchingFor(const QString& sourceName);
-	KJob *fetchSchedule(const QString& routeKey, DayType day, int direction);
+	bool setupScheduleFetch(const QString& sourceName, const QString& fullRouteName, DayType day);
+	void maybeRetrySource(const QString& sourceName, KJob *completedJob);
+	KJob *fetchSchedule(const QString& routeName, DayType day, int direction);
 	KJob *fetchRouteList();
 
 	QVariantMap parseSchedule(const QByteArray& schedule) const;
@@ -80,21 +82,25 @@ class RtdDenverEngine : public Plasma::DataEngine
 
 	QString scheduleFilePath(const QString& route, DayType day, int direction) const;
 	void saveSchedule(const QString& route, DayType day, int direction, const QVariantMap& schedule) const;
-	Plasma::DataEngine::Data loadSchedule(const QString& route, DayType day, int direction) const;
+	Plasma::DataEngine::Data loadSchedule(const QString& fullRouteName, DayType day) const;
 
 	struct JobData {
-	    QString sourceName;
+	    QSet<QString> pendingSources;
 	    QString routeName;
-	    DayType routeDay;
 	    QByteArray networkData;
+	    int direction;
+	    DayType routeDay;
 
 	    JobData() { }
-	    JobData(const QString& n) : sourceName(n) { }
-	    JobData(const QString& n, const QString& r, DayType d)
-	      : sourceName(n), routeName(r), routeDay(d) { }
+	    JobData(const QString& n, const QString& r, DayType d, int dir)
+	      : routeName(r), direction(dir), routeDay(d) { pendingSources.insert(n); }
 	};
 
+	// this tells each job what it was and which sources are waiting on it
 	QMap<KJob *, JobData> m_jobData;
+
+	// this tells each source what jobs it is waiting on
+	QHash<QString, QSet<KJob *> > m_pendingSchedules;
 
 	struct RouteData {
 	    QString key;
@@ -106,8 +112,7 @@ class RtdDenverEngine : public Plasma::DataEngine
 	};
 
 	QHash<QString, RouteData> m_routes;
-	QStringList m_pendingValidation;
-	QStringList m_pendingRoutes;
+	QSet<QString> m_pendingRoutes;
 	QDate m_validCheckedDate;
 	QDate m_validAsOf;
 };

@@ -113,6 +113,8 @@ static int directionFromCode(const QString& directionCode)
 	return 'E';
     else if (directionCode == QLatin1String("W"))
 	return 'W';
+    else if (directionCode == QLatin1String("?"))
+	return '?';
     else if (directionCode == QLatin1String("CW"))
 	return 'C';
     else if (directionCode == QLatin1String("CCW"))
@@ -124,37 +126,35 @@ static int directionFromCode(const QString& directionCode)
 
 bool RtdDenverEngine::updateSourceEvent(const QString& sourceName)
 {
-    if (m_pendingValidation.contains(sourceName) || m_pendingRoutes.contains(sourceName))
-	return false;
+    if (m_pendingRoutes.contains(sourceName))
+	return true;
 
+    if (m_routes.isEmpty() && !loadRouteList()) {
+	// we need our route mapping before we can do anything else:
+	// request a load of the route list and queue up this source
+	if (m_pendingRoutes.isEmpty()) {
+	    KJob *fetchJob = fetchRouteList();
+	    if (fetchJob) {
+		m_jobData.insert(fetchJob, JobData());
+	    }
+	}
+	m_pendingRoutes.insert(sourceName);
+	return true;
+    }
+
+    // before we try to load things from cache, we need to know our cache validity
     if (!schedulesValid()) {
-	checkValidity();
-	m_pendingValidation.append(sourceName);
-	return false;
+	// we haven't loaded anything in the last day: do a network load to recheck
+	// our schedule validity
+	checkValidity(sourceName);
+	return true;
     }
 
     if (sourceName == QLatin1String("ValidAsOf")) {
 	// "ValidAsOf": returns the date as of which our bus schedules are valid
 	setData(sourceName, m_validAsOf);
 	return true;
-    }
-
-    if (m_routes.isEmpty() && !loadRouteList()) {
-	// we need our route mapping before we can do anything else:
-	// request a load of the route list and queue up this source
-	if (!alreadyFetchingFor("Routes")) {
-	    KJob *fetchJob = fetchRouteList();
-	    if (fetchJob) {
-		m_jobData.insert(fetchJob, JobData("Routes"));
-	    }
-	}
-	m_pendingRoutes.append(sourceName);
-
-	// we don't have any new information yet
-	return true;
-    }
-
-    if (sourceName == QLatin1String("Routes")) {
+    } else if (sourceName == QLatin1String("Routes")) {
 	// "Routes": returns the list of route names
 	setData(sourceName, routeList());
 	return true;
@@ -175,15 +175,9 @@ bool RtdDenverEngine::updateSourceEvent(const QString& sourceName)
 	    return true;
 	}
 
-	if (alreadyFetchingFor(sourceName))
-	    return true;
-
 	// load a schedule for this route with an unspecified direction: that will
 	// tell us the directions for this route
-	KJob *fetchJob = fetchSchedule(keyForRoute(routeName), Weekday, 0);
-	m_jobData.insert(fetchJob, JobData(sourceName, routeName, Weekday));
-	return true;
-
+	return setupScheduleFetch(sourceName, routeName + "-?", Weekday);
     } else if (sourceName.startsWith("ScheduleOf ")) {
 	// "ScheduleOf routeName-directionCode": returns a map of <stop name, timetable>
 	// for all the stops of the route @p routeName going in the direction @p
@@ -192,34 +186,14 @@ bool RtdDenverEngine::updateSourceEvent(const QString& sourceName)
 	// is the subroute of that bus or train (e.g. B, BF, or BX). Note that the list
 	// is sorted by arrival time, so stops storted with A.M. times after stops with
 	// P.M. times are actually arriving on the next day.
-	int hyphenPos = sourceName.indexOf('-');
-	if (hyphenPos < 0)
-	    return false;
-
-	QString routeName = sourceName.mid(11, hyphenPos - 11);
-//	kDebug() << "ScheduleOf: routeName =" << routeName;
-	if (!m_routes.contains(routeName))
-	    return false;
-
-	// convert the textual direction code to our internal single-character code
-	QString directionCode = sourceName.mid(hyphenPos + 1);
-	int direction = directionFromCode(directionCode);
-	if (!direction)
-	    return false;
+	QString fullRouteName = sourceName.mid(11);
 
 	// try to load the schedule from cache
-	Plasma::DataEngine::Data stops = loadSchedule(routeName, dayType(Today), direction);
+	Plasma::DataEngine::Data stops = loadSchedule(fullRouteName, dayType(Today));
 
-	if (stops.isEmpty()) {
-	    // no valid cached schedule, so go to the network
-	    if (alreadyFetchingFor(sourceName))
-		return true;
-
-	    // we don't have this route cached: load it from the network
-	    KJob *fetchJob = fetchSchedule(keyForRoute(routeName), dayType(Today), direction);
-	    m_jobData.insert(fetchJob, JobData(sourceName, routeName, dayType(Today)));
-	    return true;
-	}
+	// no cached data: go to the network
+	if (stops.isEmpty())
+	    return setupScheduleFetch(sourceName, fullRouteName, dayType(Today));
 
 	setData(sourceName, stops);
 	return true;
@@ -239,10 +213,8 @@ void RtdDenverEngine::checkValidity()
 
     KJob *fetchJob = fetchSchedule("routeId=B", Weekday, 0);
 
-    if (fetchJob)
-      m_jobData.insert(fetchJob, JobData(QString()));
+    return false;
 }
-
 
 void RtdDenverEngine::dataReceived(KIO::Job *job, const QByteArray& data)
 {
@@ -261,12 +233,25 @@ void RtdDenverEngine::routeListResult(KJob *job)
     for (QHash<QString, QString>::const_iterator it = routes.constBegin(); it != routes.constEnd(); it++)
 	m_routes.insert(it.key(), RouteData(it.value()));
 
-    // if we had an explicit request for the routes
-    if (!jd.sourceName.isEmpty())
-	setData(jd.sourceName, routeList());
+    // we've got data
+    setData(QLatin1String("Routes"), routeList());
 
-    while (!m_pendingRoutes.isEmpty())
-	updateSourceEvent(m_pendingRoutes.takeFirst());
+    // tell the sources that were waiting for the route list to retry
+    foreach (const QString& sourceName, m_pendingRoutes)
+	updateSourceEvent(sourceName);
+    m_pendingRoutes.clear();
+}
+
+void RtdDenverEngine::maybeRetrySource(const QString& sourceName, KJob *completedJob)
+{
+    Q_ASSERT(m_pendingSchedules[sourceName].contains(completedJob));
+    m_pendingSchedules[sourceName].remove(completedJob);
+
+    // if this source is not waiting on anything else, retry it
+    if (m_pendingSchedules[sourceName].isEmpty()) {
+	m_pendingSchedules.remove(sourceName);
+	updateSourceEvent(sourceName);
+    }
 }
 
 void RtdDenverEngine::schedulePageResult(KJob *job)
@@ -287,6 +272,7 @@ void RtdDenverEngine::schedulePageResult(KJob *job)
     m_validCheckedDate = QDate::currentDate();
     QDate validAsOf = QDate::fromString(scheduleData["validAsOf"].toString(), QLatin1String("MMMM d, yyyy"));
     if (validAsOf.isValid()) {
+	// we've got a known validity: if it's new, refresh everything
 	QDate oldValidAsOf = m_validAsOf;
 	m_validAsOf = validAsOf;
 	if (oldValidAsOf.isValid() && oldValidAsOf != validAsOf)
@@ -315,26 +301,78 @@ void RtdDenverEngine::schedulePageResult(KJob *job)
 		    scheduleData[QLatin1String("schedules")].toMap());
     }
 
-    // call sourceUpdateEvent again to retry the desired source
-    if (!jd.sourceName.isEmpty())
-	updateSourceEvent(jd.sourceName);
-
-    // and retry any queries waiting for a validity test
-    while (!m_pendingValidation.isEmpty())
-	updateSourceEvent(m_pendingValidation.takeFirst());
+    // let each source that is waiting for us know that we're done
+    foreach (const QString& sourceName, jd.pendingSources)
+	maybeRetrySource(sourceName, job);
 }
 
-// do we already have a fetch underway for the give source name
-bool RtdDenverEngine::alreadyFetchingFor(const QString& query)
+// request a schedule from the network or join a pending fetch of the same schedule, as needed
+bool RtdDenverEngine::setupScheduleFetch(const QString& sourceName, const QString& fullRouteName, DayType day)
 {
-    foreach (const JobData& jd, m_jobData) {
-	if (jd.sourceName == query)
+    int hyphenPos = fullRouteName.indexOf('-');
+    if (hyphenPos < 0)
+	return false;
+
+    QString routeName = fullRouteName.left(hyphenPos);
+    QString directionCode = fullRouteName.mid(hyphenPos + 1);
+    int direction = directionFromCode(directionCode);
+
+    if (!m_routes.contains(routeName))
+	return false;
+
+    // see if there's already a pending network load for this job
+    for (QMap<KJob *, JobData>::iterator it = m_jobData.begin(); it != m_jobData.end(); it++) {
+	if (it.value().routeName == routeName && it.value().routeDay == day &&
+	    it.value().direction == direction) {
+	    // there is: add us to its queue and note that we're waiting on it
+	    // (if we aren't already...)
+	    if (it.value().pendingSources.contains(sourceName))
+		return true;
+
+	    it.value().pendingSources.insert(sourceName);
+	    m_pendingSchedules[sourceName].insert(it.key());
 	    return true;
+	}
     }
-    return false;
+
+    // no pending load: set one up
+    KJob *fetchJob = fetchSchedule(keyForRoute(routeName), day, direction);
+    if (!fetchJob)
+	return false;
+
+    // store the parameters of this job and note that this source is waiting on it
+    m_jobData.insert(fetchJob, JobData(sourceName, routeName, day, direction));
+    m_pendingSchedules[sourceName].insert(fetchJob);
+    kDebug() << "load for " << sourceName << "is " << fetchJob;
+    return true;
 }
 
-// fetch a schedule for a given route, day, and direction
+// do a direct network load to check our cache validity timestamp
+void RtdDenverEngine::checkValidity(const QString& sourceName)
+{
+    // if there's already a pending network load of a schedule page, we can
+    // piggy-back off of it
+    for (QMap<KJob *, JobData>::iterator it = m_jobData.begin(); it != m_jobData.end(); it++) {
+	if (!it.value().routeName.isEmpty()) {
+	    it.value().pendingSources.insert(sourceName);
+	    m_pendingSchedules[sourceName].insert(it.key());
+	    return;
+	}
+    }
+
+    // if there's no network load going, we have to kick one off
+    // since we may not nave the route list yet, we have to fully specify the load
+    // ourselves -- the B/BF/BX route (Denver-Boulder) is unlikely to ever be canceled,
+    // so we'll use it by default
+    KJob *fetchJob = fetchSchedule(QLatin1String("routeId=B"), Weekday, 'W');
+    if (!fetchJob)
+	return;
+
+    m_jobData.insert(fetchJob, JobData(sourceName, "B/BF/BX", Weekday, 'W'));
+    m_pendingSchedules[sourceName].insert(fetchJob);
+}
+
+// actually perform a network fetch of a schedule for a given route, day, and direction
 // direction == 0 means no direction specified
 KJob *RtdDenverEngine::fetchSchedule(const QString& query, DayType day, int direction)
 {
@@ -357,6 +395,7 @@ KJob *RtdDenverEngine::fetchSchedule(const QString& query, DayType day, int dire
 	    scheduleUrl += QLatin1String("&direction=Counterclock");
 	    break;
 	case 'L':
+	case '?':
 	    break;
 	default:
 	    kWarning() << "Unknown direction " << QChar(direction);
@@ -680,15 +719,21 @@ void RtdDenverEngine::saveSchedule(const QString& route, DayType day, int direct
     }
 }
 
-Plasma::DataEngine::Data RtdDenverEngine::loadSchedule(const QString& route, DayType day, int direction) const
+Plasma::DataEngine::Data RtdDenverEngine::loadSchedule(const QString& fullRouteName, DayType day) const
 {
     Plasma::DataEngine::Data data;
 
-    QFile scheduleFile(scheduleFilePath(route, day, direction));
+//    kDebug() << "trying to load " << fullRouteName;
+    QStringList parts = fullRouteName.split('-');
+    if (parts.length() != 2)
+	return data;
+
+    QFile scheduleFile(scheduleFilePath(parts.first(), day, directionFromCode(parts.last())));
 
     if (!scheduleFile.exists() || !scheduleFile.open(QIODevice::ReadOnly))
 	return data;
 
+//    kDebug() << "cache file found";
     QDataStream in(&scheduleFile);
 
     qint32 version;
@@ -701,7 +746,6 @@ Plasma::DataEngine::Data RtdDenverEngine::loadSchedule(const QString& route, Day
     if (validAsOf != m_validAsOf)
 	goto remove;
 
-//    kDebug() << "route:" << route << "direction:" << char(direction);
 
     while (!in.atEnd()) {
 	QString station;
