@@ -163,12 +163,7 @@ bool RtdDenverEngine::updateSourceEvent(const QString& sourceName)
 	// direction(s) of the route @p routeName, i.e. "N", "S", "E", "W", "Loop", "CW",
 	// or "CCW"; a two-direction route joins its directions with a hyphen, e.g.
 	// "N-S", "E-W", or "CW-CCW"
-	QStringList parts = sourceName.split(' ');
-
-	if (parts.length() < 2)
-	    return false;
-
-      QString routeName = QStringList(parts.mid(1)).join(QLatin1String(" "));
+	QString routeName = sourceName.mid(12);
 	if (!m_routes.contains(routeName))
 	    return false;
 
