@@ -129,7 +129,7 @@ bool RtdDenverEngine::updateSourceEvent(const QString& sourceName)
 	m_pendingRoutes.append(sourceName);
 
 	// we don't have any new information yet
-	return false;
+	return true;
     }
 
     if (sourceName == QLatin1String("Routes")) {
