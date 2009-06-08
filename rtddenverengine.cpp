@@ -184,8 +184,26 @@ bool RtdDenverEngine::updateSourceEvent(const QString& sourceName)
 	if (!m_routes.contains(routeName))
 	    return false;
 
-	int direction = parts.last().at(0).unicode();
+	// convert the textual direction code to our internal single-character code
+	int direction = 0;
+	QString directionCode = parts.last();
 
+	if (directionCode == QLatin1String("N"))
+	    direction = 'N';
+	else if (directionCode == QLatin1String("S"))
+	    direction = 'S';
+	else if (directionCode == QLatin1String("E"))
+	    direction = 'E';
+	else if (directionCode == QLatin1String("W"))
+	    direction = 'W';
+	else if (directionCode == QLatin1String("CW"))
+	    direction = 'C';
+	else if (directionCode == QLatin1String("CCW"))
+	    direction = 'c';
+	else if (directionCode == QLatin1String("Loop"))
+	    direction = 'L';
+
+	// try to load the schedule from cache
 	Plasma::DataEngine::Data stops = loadSchedule(routeName, todaysType(), direction);
 
 	if (stops.isEmpty()) {
