@@ -112,6 +112,7 @@ bool RtdDenverEngine::updateSourceEvent(const QString& sourceName)
     }
 
     if (sourceName == QLatin1String("ValidAsOf")) {
+	// "ValidAsOf": returns the date as of which our bus schedules are valid
 	setData(sourceName, m_validAsOf);
 	return true;
     }
@@ -132,9 +133,14 @@ bool RtdDenverEngine::updateSourceEvent(const QString& sourceName)
     }
 
     if (sourceName == QLatin1String("Routes")) {
+	// "Routes": returns the list of route names
 	setData(sourceName, routeList());
 	return true;
     } else if (sourceName.startsWith("DirectionOf ")) {
+	// "DirectionOf routeName": returns the direction code for the
+	// direction(s) of the route @p routeName, i.e. "N", "S", "E", "W", "Loop", "CW",
+	// or "CCW"; a two-direction route joins its directions with a hyphen, e.g.
+	// "N-S", "E-W", or "CW-CCW"
 	QStringList parts = sourceName.split(' ');
 
 	if (parts.length() < 2)
@@ -162,6 +168,13 @@ bool RtdDenverEngine::updateSourceEvent(const QString& sourceName)
 	return true;
 
     } else if (sourceName.startsWith("ScheduleOf ")) {
+	// "ScheduleOf routeName directionCode": returns a map of <stop name, timetable>
+	// for all the stops of the route @p routeName going in the direction @p
+	// directionCode. The timetable is a sorted list of QPair<QTime, QString>
+	// where the time is the arrival time of the bus or train, and the QString
+	// is the subroute of that bus or train (e.g. B, BF, or BX). Note that the list
+	// is sorted by arrival time, so stops storted with A.M. times after stops with
+	// P.M. times are actually arriving on the next day.
 	QStringList parts = sourceName.split(' ');
 
 	if (parts.length() < 3)
@@ -176,6 +189,7 @@ bool RtdDenverEngine::updateSourceEvent(const QString& sourceName)
 	Plasma::DataEngine::Data stops = loadSchedule(routeName, todaysType(), direction);
 
 	if (stops.isEmpty()) {
+	    // no valid cached schedule, so go to the network
 	    if (alreadyFetchingFor(sourceName))
 		return true;
 
