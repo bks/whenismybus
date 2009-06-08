@@ -100,6 +100,25 @@ RtdDenverEngine::DayType RtdDenverEngine::todaysType() const
 	return Weekday;
 }
 
+static int directionFromCode(const QString& directionCode)
+{
+    if (directionCode == QLatin1String("N"))
+	return 'N';
+    else if (directionCode == QLatin1String("S"))
+	return 'S';
+    else if (directionCode == QLatin1String("E"))
+	return 'E';
+    else if (directionCode == QLatin1String("W"))
+	return 'W';
+    else if (directionCode == QLatin1String("CW"))
+	return 'C';
+    else if (directionCode == QLatin1String("CCW"))
+	return 'c';
+    else if (directionCode == QLatin1String("Loop"))
+	return 'L';
+    return 0;
+}
+
 bool RtdDenverEngine::updateSourceEvent(const QString& sourceName)
 {
     if (m_pendingValidation.contains(sourceName) || m_pendingRoutes.contains(sourceName))
@@ -168,40 +187,27 @@ bool RtdDenverEngine::updateSourceEvent(const QString& sourceName)
 	return true;
 
     } else if (sourceName.startsWith("ScheduleOf ")) {
-	// "ScheduleOf routeName directionCode": returns a map of <stop name, timetable>
+	// "ScheduleOf routeName-directionCode": returns a map of <stop name, timetable>
 	// for all the stops of the route @p routeName going in the direction @p
 	// directionCode. The timetable is a sorted list of QPair<QTime, QString>
 	// where the time is the arrival time of the bus or train, and the QString
 	// is the subroute of that bus or train (e.g. B, BF, or BX). Note that the list
 	// is sorted by arrival time, so stops storted with A.M. times after stops with
 	// P.M. times are actually arriving on the next day.
-	QStringList parts = sourceName.split(' ');
-
-	if (parts.length() < 3)
+	int hyphenPos = sourceName.indexOf('-');
+	if (hyphenPos < 0)
 	    return false;
 
-	QString routeName = QStringList(parts.mid(1, parts.length() - 2)).join(QLatin1String(" "));
+	QString routeName = sourceName.mid(11, hyphenPos - 11);
+//	kDebug() << "ScheduleOf: routeName =" << routeName;
 	if (!m_routes.contains(routeName))
 	    return false;
 
 	// convert the textual direction code to our internal single-character code
-	int direction = 0;
-	QString directionCode = parts.last();
-
-	if (directionCode == QLatin1String("N"))
-	    direction = 'N';
-	else if (directionCode == QLatin1String("S"))
-	    direction = 'S';
-	else if (directionCode == QLatin1String("E"))
-	    direction = 'E';
-	else if (directionCode == QLatin1String("W"))
-	    direction = 'W';
-	else if (directionCode == QLatin1String("CW"))
-	    direction = 'C';
-	else if (directionCode == QLatin1String("CCW"))
-	    direction = 'c';
-	else if (directionCode == QLatin1String("Loop"))
-	    direction = 'L';
+	QString directionCode = sourceName.mid(hyphenPos + 1);
+	int direction = directionFromCode(directionCode);
+	if (!direction)
+	    return false;
 
 	// try to load the schedule from cache
 	Plasma::DataEngine::Data stops = loadSchedule(routeName, todaysType(), direction);
