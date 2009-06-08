@@ -68,8 +68,6 @@ class RtdDenverEngine : public Plasma::DataEngine
 
 	QVariantMap parseSchedule(const QByteArray& schedule) const;
 	QHash<QString, QString> parseRouteList(const QByteArray& routeList) const;
-	void addSourcesForRouteList();
-	void emitSchedulesForRoute(const QString& routeName, const QString& directions);
 
 	void saveRouteList() const;
 	bool loadRouteList();

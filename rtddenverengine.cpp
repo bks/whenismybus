@@ -51,40 +51,7 @@ QStringList RtdDenverEngine::sources() const
 
     ret << QLatin1String("Routes") << QLatin1String("ValidAsOf");
 
-    foreach (const QString& route, routeList()) {
-	ret << QLatin1String("DirectionOf ") + route;
-
-	QString directions = m_routes[route].directions;
-
-	if (!directions.isEmpty()) {
-	    ret << QLatin1String("ScheduleOf ") + route + ' ' + directions[0];
-	    ret << QLatin1String("ScheduleOf ") + route + ' ' + directions[1];
-	}
-    }
-
     return ret;
-}
-
-void RtdDenverEngine::addSourcesForRouteList()
-{
-    for (QHash<QString, RouteData>::const_iterator it = m_routes.begin(); it != m_routes.end(); it++) {
-	emit sourceAdded(QLatin1String("DirectionOf ") + it.key());
-	if (!it.value().directions.isEmpty())
-	    emitSchedulesForRoute(it.key(), it.value().directions);
-    }
-}
-
-void RtdDenverEngine::emitSchedulesForRoute(const QString& routeName, const QString& directions)
-{
-    foreach (QString direction, directions.split('-')) {
-	if (direction == QLatin1String("Loop"))
-	    direction = QLatin1String("L");
-	else if (direction == "CW")
-	    direction = QLatin1String("C");
-	else if (direction == "CCW")
-	    direction = "c";
-	emit sourceAdded(QLatin1String("ScheduleOf ") + routeName + ' ' + direction);
-    }
 }
 
 bool RtdDenverEngine::sourceRequestEvent(const QString& sourceName)
@@ -264,8 +231,6 @@ void RtdDenverEngine::routeListResult(KJob *job)
 
     while (!m_pendingRoutes.isEmpty())
 	updateSourceEvent(m_pendingRoutes.takeFirst());
-
-    addSourcesForRouteList();
 }
 
 void RtdDenverEngine::schedulePageResult(KJob *job)
@@ -299,7 +264,6 @@ void RtdDenverEngine::schedulePageResult(KJob *job)
     if (!jd.routeName.isEmpty() && m_routes[jd.routeName].directions.isEmpty()) {
 	QString directions = scheduleData[QLatin1String("availableDirections")].toString();
 	m_routes[jd.routeName].directions = directions;
-	emitSchedulesForRoute(jd.routeName, directions);
     }
 
     // finally save the schedules
@@ -581,7 +545,6 @@ bool RtdDenverEngine::loadRouteList()
 	m_routes.insert(route, RouteData(key, directions));
     }
 
-    addSourcesForRouteList();
     return true;
 }
 
