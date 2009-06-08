@@ -275,8 +275,12 @@ void RtdDenverEngine::schedulePageResult(KJob *job)
 	// we've got a known validity: if it's new, refresh everything
 	QDate oldValidAsOf = m_validAsOf;
 	m_validAsOf = validAsOf;
-	if (oldValidAsOf.isValid() && oldValidAsOf != validAsOf)
+	if (oldValidAsOf.isValid() && oldValidAsOf != validAsOf) {
+	    setData("ValidAsOf", m_validAsOf);
 	    updateAllSources();
+	} else if (!oldValidAsOf.isValid()) {
+	    setData("ValidAsOf", m_validAsOf);
+	}
     }
 
 //    kDebug() << "availableDirections:" << scheduleData[QLatin1String("availableDirections")].toString()
