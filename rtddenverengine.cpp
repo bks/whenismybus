@@ -27,7 +27,6 @@
 #include <QtCore/QByteArray>
 #include <QtCore/QDataStream>
 #include <QtCore/QFile>
-#include <QtCore/QPair>
 #include <QtCore/QRegExp>
 #include <QtCore/QTime>
 
@@ -209,21 +208,50 @@ bool RtdDenverEngine::updateSourceEvent(const QString& sourceName)
 
 	setData(sourceName, stops);
 	return true;
+    } else if (sourceName.startsWith("NextStops [")) {
+	// "NextStops [routeName1-direction1:stopName1,routeName2-direction2:stopName2,...] N TEXT?": 
+	// request a list of upcoming buses at a give set of routes and stops
+
+	// find the list of routes and stops
+	int lastBracket = sourceName.indexOf(']');
+	if (lastBracket < 0)
+	    return false;
+	QString routeList = sourceName.mid(11, lastBracket - 11);
+//	kDebug() << "NextStops: routeList =" << routeList;
+
+	// parse the rest of the parameters
+	QStringList nAndText = sourceName.mid(lastBracket + 2).split(' ');
+	if (nAndText.isEmpty())
+	    return false;
+
+	bool textForm = (nAndText.length() == 2 && nAndText.last() == QLatin1String("TEXT"));
+	int n = nAndText.first().toInt();
+
+	if (n <= 0)
+	    return false;
+
+	bool ok;
+	QList<DateTimeRoutePair> stops = stopsForCurrentDateTime(sourceName, routeList.split(','), n, &ok);
+
+	if (stops.isEmpty()) {
+	    // maybe we had to kick off some network loads
+	    return ok;
+	}
+
+	if (textForm) {
+	    QStringList ret;
+	    foreach (const DateTimeRoutePair& tr, stops) {
+		QString s = tr.second + QLatin1String(" - ") + tr.first.toString(QLatin1String("H:mm' 'AP"));
+		if (tr.first.date() != QDate::currentDate())
+		    s += QLatin1String(" [tomorrow]");
+		ret << s;
+	    }
+	    setData(sourceName, ret);
+	    return true;
+	}
+	setData(sourceName, qVariantFromValue(stops));
+	return true;
     }
-
-    return false;
-}
-
-void RtdDenverEngine::checkValidity()
-{
-    // fetching any route from the network will update our validity timestamp,
-    // so we arbitrarily fetch the B (Denver-Boulder) route, since it
-    // is highly unlikely to be canceled...
-
-    if (!m_jobData.isEmpty())
-	return;  // there's already a running job, it will take care of things for us
-
-    KJob *fetchJob = fetchSchedule("routeId=B", Weekday, 0);
 
     return false;
 }
@@ -665,9 +693,6 @@ QString RtdDenverEngine::scheduleFilePath(const QString& route, DayType day, int
     return KStandardDirs::locateLocal("data", QLatin1String("plasma_engine_rtddenver/") + fileName);
 }
 
-typedef QPair<QTime, QString> TimeRoutePair;
-Q_DECLARE_METATYPE(QList<TimeRoutePair>)
-
 static QTime parseRtdTime(const QString& str)
 {
     int hr, min;
@@ -752,7 +777,7 @@ Plasma::DataEngine::Data RtdDenverEngine::loadSchedule(const QString& fullRouteN
     if (!scheduleFile.exists() || !scheduleFile.open(QIODevice::ReadOnly))
 	return data;
 
-//    kDebug() << "cache file found";
+//    kDebug() << "cache file found for " << fullRouteName;
     QDataStream in(&scheduleFile);
 
     qint32 version;
@@ -765,7 +790,6 @@ Plasma::DataEngine::Data RtdDenverEngine::loadSchedule(const QString& fullRouteN
     if (validAsOf != m_validAsOf)
 	goto remove;
 
-
     while (!in.atEnd()) {
 	QString station;
 	in >> station;
@@ -773,12 +797,100 @@ Plasma::DataEngine::Data RtdDenverEngine::loadSchedule(const QString& fullRouteN
 	in >> stops;
 	data.insert(station, qVariantFromValue(stops));
     }
+//    kDebug() << "loaded " << fullRouteName << "from cache";
     return data;
 
 remove:
     scheduleFile.close();
     scheduleFile.remove();
     return Plasma::DataEngine::Data();
+}
+
+// the heart of the data engine: figure out what and when the next routes are to
+// stop at the location(s) of interest
+QList<DateTimeRoutePair> RtdDenverEngine::stopsForCurrentDateTime(const QString& sourceName, const QStringList& routes, int n, bool *ok)
+{
+    QList<DateTimeRoutePair> mergedStops;
+    *ok = true;
+
+    // we keep a single-element memory cache of the most recently requested
+    // route list, to try to reduce how often we hit the hard drive
+    if (m_cachedRouteList == routes && m_cachedRouteDate == QDate::currentDate()) {
+	mergedStops = m_cachedStops;
+    } else {
+	QList<QList<TimeRoutePair> > allSchedules;
+	bool loadPending = false;
+
+	// collect all the data we need
+	QList<DayType> days;
+	days << dayType(Today) << dayType(Tomorrow);
+	foreach (const QString& route, routes) {
+	    int colon = route.indexOf(':');
+	    if (colon < 0) {
+		*ok = false;
+		return QList<DateTimeRoutePair>();
+	    }
+	    QString routeName = route.left(colon);
+
+	    QList<TimeRoutePair> thisStop;
+
+	    for (int i = 0; i < 2; i++) {
+		if (i == 1 && days[1] == days[0]) {
+		    // no need to hit disk again: just duplicate "today" into "tomorrow"
+		    thisStop.append(thisStop);
+		    break;
+		}
+		DayType dt = days[i];
+		Plasma::DataEngine::Data d = loadSchedule(routeName, dt);
+		if (d.isEmpty()) {
+		    // queue a network load if we don't already have the schedule
+		    bool loadStarted = setupScheduleFetch(sourceName, routeName, dt);
+		    if (!loadStarted) {
+			*ok = false;
+			return QList<DateTimeRoutePair>();
+		    }
+		    loadPending = true;
+		} else {
+		    QVariant v = d[route.mid(colon + 1)];
+		    thisStop.append(qVariantValue< QList<TimeRoutePair> >(v));
+		}
+	    }
+	    allSchedules << thisStop;
+	}
+
+	// we have a pending load, but everything is ok otherwise
+	if (loadPending)
+	    return QList<DateTimeRoutePair>();
+
+	// convert the TimeRouteLists to a DateTimeRouteList suitable for sorting
+	foreach (const QList<TimeRoutePair>& schedule, allSchedules) {
+	    QDate day = QDate::currentDate();
+	    bool pm = false;
+	    foreach (const TimeRoutePair& tr, schedule) {
+		if (tr.first.hour() >= 12)
+		    pm = true;
+		if (pm && tr.first.hour() < 12) {
+		    pm = false;
+		    day = day.addDays(1);
+		}
+		mergedStops << qMakePair(QDateTime(day, tr.first), tr.second);
+	    }
+	}
+	qSort(mergedStops.begin(), mergedStops.end());
+
+	// cache the merged stops list
+	m_cachedRouteList = routes;
+	m_cachedRouteDate = QDate::currentDate();
+	m_cachedStops = mergedStops;
+    }
+
+    // now we've got the complete list of stops for the stations and routes of interest,
+    // pick out the @p n next stops
+    QDateTime now = QDateTime::currentDateTime();
+    int start = 0;
+    while (start < mergedStops.length() && now >= mergedStops[start].first)
+	start++;
+    return mergedStops.mid(start, n);
 }
 
 K_EXPORT_PLASMA_DATAENGINE(rtddenver, RtdDenverEngine)

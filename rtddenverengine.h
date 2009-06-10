@@ -22,8 +22,10 @@
 
 #include <QtCore/QByteArray>
 #include <QtCore/QDate>
+#include <QtCore/QDateTime>
 #include <QtCore/QHash>
 #include <QtCore/QMap>
+#include <QtCore/QPair>
 #include <QtCore/QSet>
 #include <QtCore/QString>
 #include <QtCore/QStringList>
@@ -32,6 +34,11 @@
 
 class KJob;
 namespace KIO { class Job; };
+
+typedef QPair<QTime, QString> TimeRoutePair;
+typedef QPair<QDateTime, QString> DateTimeRoutePair;
+Q_DECLARE_METATYPE(QList<TimeRoutePair>)
+Q_DECLARE_METATYPE(QList<DateTimeRoutePair>)
 
 class RtdDenverEngine : public Plasma::DataEngine
 {
@@ -84,6 +91,8 @@ class RtdDenverEngine : public Plasma::DataEngine
 	void saveSchedule(const QString& route, DayType day, int direction, const QVariantMap& schedule) const;
 	Plasma::DataEngine::Data loadSchedule(const QString& fullRouteName, DayType day) const;
 
+	QList<DateTimeRoutePair> stopsForCurrentDateTime(const QString& sourceName, const QStringList& routes, int nr, bool *ok);
+
 	struct JobData {
 	    QSet<QString> pendingSources;
 	    QString routeName;
@@ -115,6 +124,10 @@ class RtdDenverEngine : public Plasma::DataEngine
 	QSet<QString> m_pendingRoutes;
 	QDate m_validCheckedDate;
 	QDate m_validAsOf;
+
+	QDate m_cachedRouteDate;
+	QStringList m_cachedRouteList;
+	QList<DateTimeRoutePair> m_cachedStops;
 };
 
 #endif
