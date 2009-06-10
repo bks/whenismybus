@@ -1,4 +1,5 @@
 (function () {
+try {
   // figure out when this schedule is valid as of
   var validAsOf;
   var validIt = document.evaluate("//p[@class='bodyBlueHeadline']", document,
@@ -74,12 +75,12 @@
 
   var subroutes = new Object;
   while (row) {
-    var colIt = document.evaluate(".//div[@class='scheduleTimesGrey']", row,
+    var colIt = document.evaluate(".//td", row,
 	      null, XPathResult.ORDERED_NODE_ITERATOR_TYPE, null);
 
     var col = colIt.iterateNext();
     if (!col)
-      return "no columns!";
+      throw "No columns found!";
 
     var first = true;
     var i = 0;
@@ -90,8 +91,14 @@
     // the cells are times, each going with its respective station from the header row
 column:
     while (col) {
+      if (col.textContent.match(/^\s*$/)) {
+	// not a real column
+	col = colIt.iterateNext();
+	continue column;
+      }
+
       if (first && hasSubroutes) {
-	subRoute = col.textContent;
+	subRoute = col.textContent.replace(/\s+$/, "");
 	subroutes[subRoute] = 1;
 	col = colIt.iterateNext();
 	first = false;
@@ -112,6 +119,8 @@ column:
 	scheduleEntry.route = subRoute;
       }
 
+      if (typeof schedules[stations[i]] != "object")
+	throw "Bad station: " + stations[i] + " (i=" + i + ")";
       schedules[stations[i]].push(scheduleEntry);
       i++;
       col = colIt.iterateNext();
@@ -136,4 +145,7 @@ column:
   ret.availableDirections = availableDirections;
 
   return ret;
+} catch (exc) {
+  return { exception: exc };
+}
 })()
