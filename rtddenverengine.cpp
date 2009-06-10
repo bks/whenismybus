@@ -53,11 +53,6 @@ QStringList RtdDenverEngine::sources() const
     return ret;
 }
 
-bool RtdDenverEngine::sourceRequestEvent(const QString& sourceName)
-{
-    return updateSourceEvent(sourceName);
-}
-
 static bool isRtdHoliday(const QDate& date)
 {
     // New Years'
@@ -123,92 +118,114 @@ static int directionFromCode(const QString& directionCode)
     return 0;
 }
 
+bool RtdDenverEngine::sourceRequestEvent(const QString& sourceName)
+{
+    if (m_pendingRoutes.contains(sourceName))
+        return true;
+
+    if (m_routes.isEmpty() && !loadRouteList()) {
+        // we need our route mapping before we can do anything else:
+        // request a load of the route list and queue up this source
+        if (m_pendingRoutes.isEmpty()) {
+            KJob *fetchJob = fetchRouteList();
+            if (fetchJob) {
+                m_jobData.insert(fetchJob, JobData());
+            }
+        }
+        m_pendingRoutes.insert(sourceName);
+        setData(sourceName, Plasma::DataEngine::Data());
+        return true;
+    }
+
+    if (!schedulesValid()) {
+        // we haven't loaded anything in the last day: do a network load to recheck
+        // our schedule validity
+        checkValidity(sourceName);
+        setData(sourceName, Plasma::DataEngine::Data());
+        return true;
+    }
+
+    // now handle the actual sources
+    if (sourceName == QLatin1String("ValidAsOf")) {
+        // "ValidAsOf": returns the date as of which our bus schedules are valid
+        setData(sourceName, m_validAsOf);
+        return true;
+    } else if (sourceName == QLatin1String("Routes")) {
+        // "Routes": returns the list of route names
+        setData(sourceName, routeList());
+        return true;
+    }  else if (sourceName.startsWith("DirectionOf ")) {
+        // "DirectionOf routeName": returns the direction code for the
+        // direction(s) of the route @p routeName, i.e. "N", "S", "E", "W", "Loop", "CW",
+        // or "CCW"; a two-direction route joins its directions with a hyphen, e.g.
+        // "N-S", "E-W", or "CW-CCW"
+        QString routeName = sourceName.mid(12);
+        if (!m_routes.contains(routeName))
+            return false;
+
+        QString directions = m_routes[routeName].directions;
+
+        // we already know which way this route runs
+        if (!directions.isEmpty()) {
+            setData(sourceName, directions);
+            return true;
+        }
+
+        // load a schedule for this route with an unspecified direction: that will
+        // tell us the directions for this route
+        return setupScheduleFetch(sourceName, routeName + "-?", Weekday);
+    } else if (sourceName.startsWith("ScheduleOf ")) {
+        // "ScheduleOf routeName-directionCode": returns a map of <stop name, timetable>
+        // for all the stops of the route @p routeName going in the direction @p
+        // directionCode. The timetable is a sorted list of QPair<QTime, QString>
+        // where the time is the arrival time of the bus or train, and the QString
+        // is the subroute of that bus or train (e.g. B, BF, or BX). Note that the list
+        // is sorted by arrival time, so stops storted with A.M. times after stops with
+        // P.M. times are actually arriving on the next day.
+        bool textForm = sourceName.endsWith(QLatin1String(" TEXT"));
+        QString fullRouteName = sourceName.mid(11, sourceName.length() - (textForm ? 11+5 : 11));
+
+        // try to load the schedule from cache
+        Plasma::DataEngine::Data stops = loadSchedule(fullRouteName, dayType(Today));
+
+        // no cached data: go to the network
+        if (stops.isEmpty())
+            return setupScheduleFetch(sourceName, fullRouteName, dayType(Today));
+
+        // convert to a textual representation if requested
+        if (textForm) {
+            for (Plasma::DataEngine::Data::iterator it = stops.begin(); it != stops.end(); it++) {
+                QStringList stringified;
+                QList<TimeRoutePair> trp = it.value().value< QList<TimeRoutePair> >();
+                foreach (const TimeRoutePair& tp, trp)
+                    stringified << tp.second + QLatin1String(" - ") + tp.first.toString("H:mm' 'AP");
+                *it = QVariant(stringified);
+            }
+        }
+
+        setData(sourceName, stops);
+        return true;
+    }
+
+    return updateSourceEvent(sourceName);
+}
+
+
+
 bool RtdDenverEngine::updateSourceEvent(const QString& sourceName)
 {
     if (m_pendingRoutes.contains(sourceName))
-	return true;
-
-    if (m_routes.isEmpty() && !loadRouteList()) {
-	// we need our route mapping before we can do anything else:
-	// request a load of the route list and queue up this source
-	if (m_pendingRoutes.isEmpty()) {
-	    KJob *fetchJob = fetchRouteList();
-	    if (fetchJob) {
-		m_jobData.insert(fetchJob, JobData());
-	    }
-	}
-	m_pendingRoutes.insert(sourceName);
-	return true;
-    }
+        return false;   // nothing new yet
 
     // before we try to load things from cache, we need to know our cache validity
     if (!schedulesValid()) {
 	// we haven't loaded anything in the last day: do a network load to recheck
 	// our schedule validity
 	checkValidity(sourceName);
-	return true;
+	return false;   // nothing new yet
     }
 
-    if (sourceName == QLatin1String("ValidAsOf")) {
-	// "ValidAsOf": returns the date as of which our bus schedules are valid
-	setData(sourceName, m_validAsOf);
-	return true;
-    } else if (sourceName == QLatin1String("Routes")) {
-	// "Routes": returns the list of route names
-	setData(sourceName, routeList());
-	return true;
-    } else if (sourceName.startsWith("DirectionOf ")) {
-	// "DirectionOf routeName": returns the direction code for the
-	// direction(s) of the route @p routeName, i.e. "N", "S", "E", "W", "Loop", "CW",
-	// or "CCW"; a two-direction route joins its directions with a hyphen, e.g.
-	// "N-S", "E-W", or "CW-CCW"
-	QString routeName = sourceName.mid(12);
-	if (!m_routes.contains(routeName))
-	    return false;
-
-	QString directions = m_routes[routeName].directions;
-
-	// we already know which way this route runs
-	if (!directions.isEmpty()) {
-	    setData(sourceName, directions);
-	    return true;
-	}
-
-	// load a schedule for this route with an unspecified direction: that will
-	// tell us the directions for this route
-	return setupScheduleFetch(sourceName, routeName + "-?", Weekday);
-    } else if (sourceName.startsWith("ScheduleOf ")) {
-	// "ScheduleOf routeName-directionCode": returns a map of <stop name, timetable>
-	// for all the stops of the route @p routeName going in the direction @p
-	// directionCode. The timetable is a sorted list of QPair<QTime, QString>
-	// where the time is the arrival time of the bus or train, and the QString
-	// is the subroute of that bus or train (e.g. B, BF, or BX). Note that the list
-	// is sorted by arrival time, so stops storted with A.M. times after stops with
-	// P.M. times are actually arriving on the next day.
-	bool textForm = sourceName.endsWith(QLatin1String(" TEXT"));
-	QString fullRouteName = sourceName.mid(11, sourceName.length() - (textForm ? 11+5 : 11));
-
-	// try to load the schedule from cache
-	Plasma::DataEngine::Data stops = loadSchedule(fullRouteName, dayType(Today));
-
-	// no cached data: go to the network
-	if (stops.isEmpty())
-	    return setupScheduleFetch(sourceName, fullRouteName, dayType(Today));
-
-	// convert to a textual representation if requested
-	if (textForm) {
-	    for (Plasma::DataEngine::Data::iterator it = stops.begin(); it != stops.end(); it++) {
-		QStringList stringified;
-		QList<TimeRoutePair> trp = it.value().value< QList<TimeRoutePair> >();
-		foreach (const TimeRoutePair& tp, trp)
-		    stringified << tp.second + QLatin1String(" - ") + tp.first.toString("H:mm' 'AP");
-		*it = QVariant(stringified);
-	    }
-	}
-
-	setData(sourceName, stops);
-	return true;
-    } else if (sourceName.startsWith("NextStops [")) {
+    if (sourceName.startsWith("NextStops [")) {
 	// "NextStops [routeName1-direction1:stopName1,routeName2-direction2:stopName2,...] N TEXT?": 
 	// request a list of upcoming buses at a give set of routes and stops
 
@@ -235,6 +252,8 @@ bool RtdDenverEngine::updateSourceEvent(const QString& sourceName)
 
 	if (stops.isEmpty()) {
 	    // maybe we had to kick off some network loads
+            if (ok)
+                setData(sourceName, Plasma::DataEngine::Data());
 	    return ok;
 	}
 
@@ -290,7 +309,7 @@ void RtdDenverEngine::maybeRetrySource(const QString& sourceName, KJob *complete
     // if this source is not waiting on anything else, retry it
     if (m_pendingSchedules[sourceName].isEmpty()) {
 	m_pendingSchedules.remove(sourceName);
-	updateSourceEvent(sourceName);
+	sourceRequestEvent(sourceName);
     }
 }
 
