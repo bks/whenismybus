@@ -186,7 +186,8 @@ bool RtdDenverEngine::updateSourceEvent(const QString& sourceName)
 	// is the subroute of that bus or train (e.g. B, BF, or BX). Note that the list
 	// is sorted by arrival time, so stops storted with A.M. times after stops with
 	// P.M. times are actually arriving on the next day.
-	QString fullRouteName = sourceName.mid(11);
+	bool textForm = sourceName.endsWith(QLatin1String(" TEXT"));
+	QString fullRouteName = sourceName.mid(11, sourceName.length() - (textForm ? 11+5 : 11));
 
 	// try to load the schedule from cache
 	Plasma::DataEngine::Data stops = loadSchedule(fullRouteName, dayType(Today));
@@ -194,6 +195,17 @@ bool RtdDenverEngine::updateSourceEvent(const QString& sourceName)
 	// no cached data: go to the network
 	if (stops.isEmpty())
 	    return setupScheduleFetch(sourceName, fullRouteName, dayType(Today));
+
+	// convert to a textual representation if requested
+	if (textForm) {
+	    for (Plasma::DataEngine::Data::iterator it = stops.begin(); it != stops.end(); it++) {
+		QStringList stringified;
+		QList<TimeRoutePair> trp = it.value().value< QList<TimeRoutePair> >();
+		foreach (const TimeRoutePair& tp, trp)
+		    stringified << tp.second + QLatin1String(" - ") + tp.first.toString("H:mm' 'AP");
+		*it = QVariant(stringified);
+	    }
+	}
 
 	setData(sourceName, stops);
 	return true;
