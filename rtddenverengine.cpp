@@ -359,7 +359,7 @@ bool RtdDenverEngine::setupScheduleFetch(const QString& sourceName, const QStrin
     // store the parameters of this job and note that this source is waiting on it
     m_jobData.insert(fetchJob, JobData(sourceName, routeName, day, direction));
     m_pendingSchedules[sourceName].insert(fetchJob);
-    kDebug() << "load for " << sourceName << "is " << fetchJob;
+//    kDebug() << "load for " << sourceName << "is " << fetchJob;
     return true;
 }
 
@@ -671,7 +671,7 @@ Q_DECLARE_METATYPE(QList<TimeRoutePair>)
 static QTime parseRtdTime(const QString& str)
 {
     int hr, min;
-    int digitCount;
+    int digitCount = 0;
 
     if (str.length() < 4)
 	return QTime();
@@ -691,6 +691,9 @@ static QTime parseRtdTime(const QString& str)
     } else {
 	return QTime();
     }
+
+    if (digitCount >= str.length())
+	return QTime();
 
     if (hr == 12 && str[digitCount] == 'A')
 	hr -= 12;
