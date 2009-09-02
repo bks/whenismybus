@@ -322,14 +322,19 @@ void RtdDenverEngine::schedulePageResult(KJob *job)
 
     // parse the downloaded schedule
     QVariantMap scheduleData = parseSchedule(jd.networkData);
+    QDate validAsOf;
 
     if (scheduleData.isEmpty())
 	return;
 
+    // if the route doesn't exist on this day, save an empty result
+    if (scheduleData["notFound"].toInt())
+        goto doSave;
+
     // store the parsed data:
     // first check the schedule's temporal validity
     m_validCheckedDate = QDate::currentDate();
-    QDate validAsOf = QDate::fromString(scheduleData["validAsOf"].toString(), QLatin1String("MMMM d, yyyy"));
+    validAsOf = QDate::fromString(scheduleData["validAsOf"].toString(), QLatin1String("MMMM d, yyyy"));
     if (validAsOf.isValid()) {
 	// we've got a known validity: if it's new, refresh everything
 	QDate oldValidAsOf = m_validAsOf;
@@ -352,16 +357,13 @@ void RtdDenverEngine::schedulePageResult(KJob *job)
     }
 
     // finally save the schedules
+doSave:
     if (!jd.routeName.isEmpty()) {
-      QString direction = scheduleData[QLatin1String("direction")].toString();
-      if (direction == QLatin1String("CW"))
-	  direction = "C";
-      else if (direction == QLatin1String("CCW"))
-	  direction = "c";
+      QString directionCode = scheduleData[QLatin1String("direction")].toString();
+      int direction = (directionCode.isEmpty() ? jd.direction : directionFromCode(directionCode));
 
-      if (!direction.isEmpty())
-	  saveSchedule(jd.routeName, jd.routeDay, direction.at(0).unicode(),
-		    scheduleData[QLatin1String("schedules")].toMap());
+      if (direction != '?')
+	  saveSchedule(jd.routeName, jd.routeDay, direction, scheduleData["schedules"].toMap());
     }
 
     // let each source that is waiting for us know that we're done
