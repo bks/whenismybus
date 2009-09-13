@@ -6,10 +6,14 @@ try {
 		  null, XPathResult.UNORDERED_NODE_ITERATOR_TYPE, null);
   for (var possibleValid = validIt.iterateNext(); possibleValid; possibleValid = validIt.iterateNext()) {
     var captures;
-    if ((captures = /Schedule\s+effective\s+as\s+of\s+(\w+ \d+, \d+)/.exec(possibleValid.textContent)) != null) {
+    if ((captures = /Schedule\s+effective\s+as\s+of\s+(\w+\s+\d+,\s+\d+)/.exec(possibleValid.textContent)) != null) {
       validAsOf = captures[1];
       break;
     }
+  }
+
+  if (validAsOf == null) {
+      return { notFound: 1 };
   }
 
   // figure out what directions this route goes
