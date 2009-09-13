@@ -87,11 +87,11 @@ RtdDenverEngine::DayType RtdDenverEngine::dayType(TodayTomorrow tt) const
     QDate today = QDate::currentDate();
 
     if (tt == Tomorrow)
-	today.addDays(1);
+	today = today.addDays(1);
 
-    if (today.day() == Qt::Saturday)
+    if (today.dayOfWeek() == Qt::Saturday)
 	return Saturday;
-    else if (today.day() == Qt::Sunday || isRtdHoliday(today))
+    else if (today.dayOfWeek() == Qt::Sunday || isRtdHoliday(today))
 	return SundayHoliday;
     else
 	return Weekday;
